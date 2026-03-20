@@ -1,0 +1,103 @@
+---
+# Post k3s Setup - Configure cluster components
+# Run after: ansible-playbook -i inventory.ini setup-k3s-cluster.yml
+# Then run: ansible-playbook -i inventory.ini post-k3s-setup.yml
+
+- name: Post k3s Setup - Configure cluster
+  hosts: localhost  # Run locally to access kubeconfig
+  become: no
+  gather_facts: yes
+  connection: local
+  tags: [post-setup, longhorn, taints]
+
+  vars:
+    kubeconfig_path: "/home/alex/.kube/config"
+
+  pre_tasks:
+    - name: Check if kubeconfig exists
+      stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeconfig_check
+
+    - name: Fail if kubeconfig is missing
+      fail:
+        msg: "kubeconfig not found at {{ kubeconfig_path }}. Run setup-k3s-cluster.yml first."
+      when: not kubeconfig_check.stat.exists
+
+  tasks:
+    - name: Set KUBECONFIG environment variable
+      set_fact:
+        kubeconfig_env: "KUBECONFIG={{ kubeconfig_path }}"
+
+    - name: Check if all nodes are ready
+      shell: "{{ kubeconfig_env }} kubectl get nodes --no-headers | grep -v Ready"
+      register: not_ready_nodes
+      failed_when: false
+      tags: [wait, nodes]
+
+    - name: Display cluster nodes
+      shell: "{{ kubeconfig_env }} kubectl get nodes -o wide"
+      register: cluster_nodes
+      changed_when: false
+      tags: [info, nodes]
+
+    - name: Show cluster nodes
+      debug:
+        var: cluster_nodes.stdout_lines
+      tags: [info, nodes]
+
+    - name: Add ArgoCD Helm repository
+      kubernetes.core.helm_repository:
+        name: argo
+        repo_url: https://argoproj.github.io/argo-helm
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, helm]
+
+    - name: Install ArgoCD
+      kubernetes.core.helm:
+        name: "{{ argocd_release_name }}"
+        chart_ref: argo/argo-cd
+        release_namespace: "{{ argocd_namespace }}"
+        create_namespace: false
+        chart_version: "{{ argocd_version }}"
+        kubeconfig: "/home/{{ local_user }}/.kube/config"
+        values_files:
+          - "{{ playbook_dir | dirname| dirname | dirname }}/bootstrap/argocd/values.yaml"
+        wait: true
+        timeout: 300s
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, helm]
+
+    - name: Wait for ArgoCD to be ready
+      shell: |
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" get pods -n "{{ argocd_namespace }}" -l "app.kubernetes.io/name=argocd-server" -o jsonpath='{.items[0].status.phase}' | grep -q "Running"
+      register: argocd_ready
+      until: argocd_ready.rc == 0
+      retries: 30
+      delay: 10
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, wait]
+
+    - name: Apply root-app.yaml to bootstrap GitOps
+      shell: |
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ playbook_dir | dirname | dirname | dirname }}/gitops/root-app.yaml"
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, gitops, bootstrap]
+
+    - name: Display ArgoCD installation reminder
+      debug:
+        msg: "ArgoCD installation complete! Remember to bootstrap Bitwarden credentials: kubectl apply -f bootstrap/bitwarden-credentials-secret.yaml"
+      when: is_first_controller
+      tags: [argocd, reminder]

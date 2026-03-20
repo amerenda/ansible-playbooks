@@ -1,0 +1,22 @@
+# Longhorn Storage Node Configuration Variables
+
+# Longhorn storage node control
+# Set to false to exclude this node from Longhorn storage
+# Default: true (all nodes can store Longhorn data)
+# Example: longhorn_storage_enabled: false  # Exclude this node from storage
+longhorn_storage_enabled: true
+
+# Node taints for Longhorn-only nodes
+# Simple longhorn taint - only Longhorn pods can schedule here
+longhorn_taints:
+  - "longhorn:NoSchedule"
+
+# Node labels
+# All nodes get the longhorn-storage label so Longhorn can schedule anywhere
+longhorn_labels:
+  - "longhorn-storage=true"
+
+# Simplified storage system
+# All nodes can store Longhorn data (no storage gate)
+# Longhorn pods schedule on all nodes with longhorn-storage label
+longhorn_storage_label: "longhorn-storage=true"

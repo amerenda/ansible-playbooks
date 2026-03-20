@@ -1,0 +1,114 @@
+- name: Post K3s Setup
+  hosts: all
+  become: yes
+  gather_facts: yes
+  tags: [k3s, post-setup]
+
+  vars:
+    # Longhorn storage configuration
+    enable_longhorn_storage: "{{ (longhorn_storage_enabled | default(true)) | bool }}"
+    longhorn_taints:
+      - "longhorn:NoSchedule"
+    longhorn_labels:
+      - "longhorn-storage=true"
+    rpi5_labels:
+      - "rpi5-host=true"
+    flannel_taints:
+      - "flannel.io/required=true:NoSchedule"
+
+  pre_tasks:
+    - name: Check if k3s is installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+      tags: [k3s, check]
+
+    - name: Fail if k3s is not installed
+      fail:
+        msg: "k3s is not installed on this node. Please run k3s-worker.yml first for longhorn-only nodes."
+      when: not k3s_installed.stat.exists
+      tags: [k3s, check]
+
+    - name: Check if kubectl is available and cluster is ready
+      shell: |
+        kubectl get nodes --no-headers | wc -l
+      delegate_to: localhost
+      become: no
+      register: kubectl_check
+      failed_when: false
+      tags: [k3s, post-setup]
+
+  tasks:
+    # STORAGE LABELS
+    - name: Add longhorn-storage labels to storage nodes
+      shell: |
+        kubectl label node {{ inventory_hostname }} {{ item }} --overwrite
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['storage'] | default([]))
+      loop: "{{ longhorn_labels }}"
+      tags: [k3s, labels, longhorn, storage]
+
+    - name: Remove Longhorn storage labels from node
+      shell: |
+        kubectl label node {{ inventory_hostname }} {{ item | replace('=', '-') }} || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname not in (groups['storage'] | default([]))
+      loop: "{{ longhorn_labels }}"
+      tags: [k3s, labels, longhorn]
+
+    # STORAGE ONLY TAINTS
+    - name: Add Longhorn-only taints to storage_only nodes
+      shell: |
+        kubectl taint node {{ inventory_hostname }} {{ item }} --overwrite
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['storage_only'] | default([]))
+      loop: "{{ longhorn_taints }}"
+      tags: [k3s, taints]
+  
+    - name: Remove Longhorn-only taints from nodes not in the "storage_only" group
+      shell: |
+        kubectl taint node {{ inventory_hostname }} {{ item | replace(':', '-:') }} --overwrite || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname not in (groups['storage_only'] | default([]))
+      loop: "{{ longhorn_taints }}"
+      tags: [k3s, taints]
+
+    - name: Add flannel taints to storage_only nodes
+      shell: |
+        kubectl taint node {{ inventory_hostname }} {{ item }} --overwrite
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['storage_only'] | default([]))
+      loop: "{{ flannel_taints }}"
+      tags: [k3s, taints]
+  
+    - name: Remove flannel taints from nodes not in the "storage_only" group
+      shell: |
+        kubectl taint node {{ inventory_hostname }} {{ item | replace(':', '-:') }} --overwrite || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname not in (groups['storage_only'] | default([]))
+      loop: "{{ flannel_taints }}"
+      tags: [k3s, taints]
+
+    - name: Add rpi5 hosts labels to rpi5 hosts
+      shell: |
+        kubectl label node {{ inventory_hostname }} {{ item }} --overwrite
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['rpi5-hosts'] | default([]))
+      loop: "{{ rpi5_labels }}"
+      tags: [k3s, labels]
+
+    - name: Remove rpi5 hosts label from non-rpi5 hosts
+      shell: |
+        kubectl label node {{ inventory_hostname }} {{ item.split('=')[0] }}- || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname not in (groups['rpi5-hosts'] | default([]))
+      loop: "{{ rpi5_labels }}"
+      tags: [k3s, labels]

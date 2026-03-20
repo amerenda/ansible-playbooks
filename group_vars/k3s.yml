@@ -1,0 +1,45 @@
+# k3s Cluster Configuration Variables
+
+# Security - Set your k3s token
+# k3s_token: "your-secure-token-here"  # Uncomment and set your token
+
+# Filesystem configuration
+# resize_rootfs: true  # Set to true to resize root filesystem to use all available space
+
+# k3s version
+k3s_version: "v1.33.5+k3s1"
+
+# Network configuration
+cluster_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+cluster_dns: "10.43.0.10"
+
+# etcd configuration
+etcd_data_dir: "/var/lib/rancher/k3s/server/db"
+etcd_snapshot_retention: 5
+etcd_snapshot_schedule: "0 */6 * * *"  # Every 6 hours
+
+# Longhorn configuration
+longhorn_storage_class: "longhorn"
+longhorn_replica_count: 3
+
+# Longhorn storage node control
+# Set to false to exclude this node from Longhorn storage
+# Default: true (all nodes can store Longhorn data)
+# Example: longhorn_storage_enabled: false  # Exclude this node from storage
+longhorn_storage_enabled: "{{ longhorn_storage_enabled | default(true) | bool }}"
+
+# Node taints for Longhorn-only nodes
+# Simple longhorn taint - only Longhorn pods can schedule here
+longhorn_taints:
+  - "longhorn:NoSchedule"
+
+# Node labels
+# All nodes get the longhorn-storage label so Longhorn can schedule anywhere
+longhorn_labels:
+  - "longhorn-storage=true"
+
+# Simplified storage system
+# All nodes can store Longhorn data (no storage gate)
+# Longhorn pods schedule on all nodes with longhorn-storage label
+longhorn_storage_label: "longhorn-storage=true"

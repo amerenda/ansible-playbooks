@@ -1,0 +1,87 @@
+---
+# Longhorn Storage Node Configuration
+# This playbook configures taints and labels for Longhorn storage nodes
+# Note: This assumes k3s is already installed (run k3s-worker.yml first for longhorn-only nodes)
+# Run with: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/longhorn-storage.yml
+
+- name: Configure Longhorn Storage Node
+  hosts: storage
+  become: yes
+  gather_facts: yes
+  tags: [k3s, longhorn, storage-config]
+
+  vars:
+    # Longhorn storage configuration
+    enable_longhorn_storage: "{{ (longhorn_storage_enabled | default(true)) | bool }}"
+    
+    # Longhorn-specific packages
+    longhorn_packages:
+      - nfs-common
+      - libisns0 
+      - libopeniscsiusr 
+      - open-iscsi
+    
+    # Longhorn service configuration
+    longhorn_iscsi_service: "iscsid"
+    longhorn_iscsi_enable: true
+    
+    # Kernel modules required for Longhorn
+    kernel_modules:
+      - nfs
+      - iscsi_tcp
+
+  pre_tasks:
+    - name: Check if k3s is installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+      tags: [k3s, check]
+
+    - name: Fail if k3s is not installed
+      fail:
+        msg: "k3s is not installed on this node. Please run k3s-worker.yml first for longhorn-only nodes."
+      when: not k3s_installed.stat.exists
+      tags: [k3s, check]
+
+  tasks:
+    - name: Install Longhorn packages
+      apt:
+        name: "{{ longhorn_packages }}"
+        state: present
+        update_cache: yes
+      tags: [packages, longhorn]
+
+    - name: Enable and start iscsid service for Longhorn
+      systemd:
+        name: "{{ longhorn_iscsi_service }}"
+        enabled: "{{ longhorn_iscsi_enable }}"
+        state: started
+      tags: [longhorn, services]
+
+    - name: Add kernel modules to /etc/modules
+      lineinfile:
+        path: /etc/modules
+        line: "{{ item }}"
+        create: yes
+      loop: "{{ kernel_modules }}"
+      tags: [longhorn, kernel]
+
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+      loop: "{{ kernel_modules }}"
+      tags: [longhorn, kernel]
+
+    - name: Verify iscsid service status
+      systemd:
+        name: "{{ longhorn_iscsi_service }}"
+      register: iscsid_status
+      changed_when: false
+      tags: [longhorn, verification]
+
+    - name: Check loaded kernel modules
+      shell: lsmod | grep -E "{{ kernel_modules | join('|') }}"
+      register: loaded_modules
+      changed_when: false
+      failed_when: false
+      tags: [longhorn, verification]

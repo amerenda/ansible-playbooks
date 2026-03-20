@@ -1,0 +1,303 @@
+---
+# Raspberry Pi 5 k3s Node Preparation Playbook
+# This playbook prepares Raspberry Pi nodes for k3s cluster
+# Combines setup-rpi.yml and common-setup.yml functionality
+# Run with: ansible-playbook -i inventory.ini setup-rpi.yml
+
+- name: Prepare Raspberry Pi nodes for k3s cluster
+  hosts: rpi
+  become: yes
+  gather_facts: yes
+  tags: [bootstrap, ssh, common, dns, packages]
+
+  vars:
+    # Ensure we have the target user defined
+    target_user: "{{ ansible_user }}"
+    
+    # System upgrade control
+    upgrade_packages: false
+    
+    # Base packages required for k3s
+    base_packages:
+      - curl
+      - vim
+      - git
+      - jq
+      - htop
+      - util-linux
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - wget
+      - iptables
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: [packages]
+
+    - name: Upgrade system packages (optional)
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      when: upgrade_packages
+      tags: [packages, upgrade]
+
+    - name: Install base packages
+      apt:
+        name: "{{ base_packages }}"
+        state: present
+        update_cache: yes
+      tags: [packages]
+
+    - name: Check if dhcpcd service exists
+      stat:
+        path: /lib/systemd/system/dhcpcd.service
+      register: dhcpcd_service_file
+      tags: [network, static-ip]
+
+    - name: Check if netplan directory exists
+      stat:
+        path: /etc/netplan
+      register: netplan_dir
+      tags: [network, static-ip]
+
+    - name: Check if NetworkManager is running
+      systemd:
+        name: NetworkManager
+      register: networkmanager_status
+      failed_when: false
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (dhcpcd)
+      blockinfile:
+        path: /etc/dhcpcd.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - Static IP Configuration"
+        block: |
+          # Static IP Configuration
+          interface eth0
+          static ip_address={{ ansible_default_ipv4.address }}/24
+          static routers=10.100.20.1
+          static domain_name_servers=1.1.1.1 8.8.8.8
+        backup: yes
+      when: dhcpcd_service_file.stat.exists
+      tags: [network, static-ip]
+
+    - name: Create netplan directory
+      file:
+        path: /etc/netplan
+        state: directory
+        mode: '0755'
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (netplan)
+      copy:
+        dest: /etc/netplan/99-static.yaml
+        content: |
+          network:
+            version: 2
+            ethernets:
+              eth0:
+                dhcp4: false
+                addresses:
+                  - {{ ansible_default_ipv4.address }}/24
+                routes:
+                  - to: default
+                    via: 10.100.20.1
+                nameservers:
+                  addresses:
+                    - 1.1.1.1
+                    - 8.8.8.8
+        mode: '0644'
+        backup: yes
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Restart networking service (dhcpcd)
+      systemd:
+        name: dhcpcd
+        state: restarted
+      when: dhcpcd_service_file.stat.exists
+      tags: [network, static-ip]
+
+    - name: Apply netplan configuration
+      command: netplan apply
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (NetworkManager)
+      nmcli:
+        conn_name: "{{ ansible_default_ipv4.interface }}"
+        type: ethernet
+        ifname: "{{ ansible_default_ipv4.interface }}"
+        ip4: "{{ ansible_default_ipv4.address }}/24"
+        gw4: "10.100.20.1"
+        dns4: "1.1.1.1,8.8.8.8"
+        method4: manual
+        state: present
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Restart NetworkManager
+      systemd:
+        name: NetworkManager
+        state: restarted
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Verify network connectivity
+      wait_for:
+        host: 8.8.8.8
+        port: 53
+        timeout: 10
+      tags: [network, static-ip]
+
+    # DNS Configuration (from common-setup.yml)
+    - name: Check if systemd-resolved service exists
+      systemd:
+        name: systemd-resolved
+      register: systemd_resolved_check
+      failed_when: false
+      tags: [dns, network]
+
+    - name: Create systemd-resolved drop-in directory
+      file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: '0755'
+      when: systemd_resolved_check.status is defined and systemd_resolved_check.status.ActiveState == "active"
+      tags: [dns, network]
+
+    - name: Configure DNS via systemd-resolved drop-in
+      copy:
+        content: |
+          [Resolve]
+          DNS=1.1.1.1 8.8.8.8
+          FallbackDNS=8.8.4.4 1.0.0.1
+          DNSSEC=no
+          DNSOverTLS=no
+        dest: /etc/systemd/resolved.conf.d/99-dns.conf
+        mode: '0644'
+      when: systemd_resolved_check.status is defined and systemd_resolved_check.status.ActiveState == "active"
+      register: dns_dropin_result
+      tags: [dns, network]
+
+    - name: Disable NetworkManager DNS management
+      lineinfile:
+        path: /etc/NetworkManager/NetworkManager.conf
+        regexp: '^dns='
+        line: 'dns=none'
+        state: present
+        create: yes
+        backup: yes
+      register: networkmanager_dns_disable
+      tags: [dns, network]
+
+    - name: Restart NetworkManager to apply DNS changes
+      systemd:
+        name: NetworkManager
+        state: restarted
+      when: networkmanager_dns_disable.changed
+      tags: [dns, network]
+
+    - name: Restart systemd-resolved to apply DNS configuration
+      systemd:
+        name: systemd-resolved
+        state: restarted
+      when: systemd_resolved_check.status is defined and systemd_resolved_check.status.ActiveState == "active" and dns_dropin_result.changed
+      tags: [dns, network]
+
+
+
+    - name: Configure timezone
+      timezone:
+        name: "America/New_York"
+      tags: [system]
+
+    - name: Generate locale
+      locale_gen:
+        name: "en_US.UTF-8"
+        state: present
+      tags: [system]
+
+    - name: Set system locale
+      lineinfile:
+        path: /etc/environment
+        line: "LANG=en_US.UTF-8"
+        state: present
+      tags: [system]
+
+
+    - name: Verify network configuration
+      command: ip addr show eth0
+      register: network_config
+      changed_when: false
+      tags: [network, verification]
+
+    # K3s cgroup configuration (from common-setup.yml)
+    - name: Check if cgroup parameters are already present
+      shell: grep -q "cgroup_memory=1" /boot/firmware/cmdline.txt
+      register: cgroup_check
+      failed_when: false
+      tags: [k3s, cgroup, raspberry-pi]
+
+    - name: Enable memory cgroup for k3s (Raspberry Pi)
+      shell: |
+        # Create backup
+        cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.backup
+        
+        # Read current cmdline
+        CMDLINE=$(cat /boot/firmware/cmdline.txt)
+        
+        # Add cgroup parameters if not present
+        if ! echo "$CMDLINE" | grep -q "cgroup_memory=1"; then
+          echo "$CMDLINE cgroup_memory=1 cgroup_enable=memory" > /boot/firmware/cmdline.txt
+          echo "Added cgroup parameters to cmdline.txt"
+        else
+          echo "Cgroup parameters already present"
+        fi
+      register: cgroup_update
+      when: not cgroup_check.rc == 0
+      tags: [k3s, cgroup, raspberry-pi]
+
+    - name: Show cgroup configuration update
+      debug:
+        var: cgroup_update.stdout_lines
+      when: cgroup_update.stdout_lines is defined
+      tags: [k3s, cgroup, raspberry-pi]
+
+    - name: Reboot if cgroup configuration was updated
+      reboot:
+        msg: "Rebooting to apply cgroup configuration changes"
+        reboot_timeout: 300
+        connect_timeout: 5
+      when: cgroup_update.changed
+      tags: [k3s, cgroup, raspberry-pi, reboot]
+
+
+    - name: Display node preparation summary
+      debug:
+        msg: |
+          ========================================
+          Node Preparation Summary for {{ inventory_hostname }}
+          ========================================
+          
+          Host: {{ ansible_default_ipv4.address }}
+          User: {{ target_user }}
+          
+          Network Configuration:
+            Static IP: {{ ansible_default_ipv4.address }}/24
+            Gateway: 10.100.20.1
+            DNS: 1.1.1.1, 8.8.8.8
+          
+          System Status:
+            Packages Installed: {{ base_packages | length }} packages
+          
+          ========================================
+      tags: [summary]
+

@@ -1,0 +1,24 @@
+---
+# Main k3s Cluster Setup Playbook
+# This playbook orchestrates the setup of the entire k3s cluster
+# Run with: ansible-playbook -i inventory/inventory.ini all.yml
+
+- name: Prepare Raspberry Pi Nodes (includes common setup)
+  import_playbook: playbooks/infrastructure/setup-rpi.yml
+  tags: [bootstrap, rpi, network, longhorn, common, dns, packages, iscsi]
+
+- name: Setup Longhorn Storage Node
+  import_playbook: playbooks/infrastructure/longhorn-storage.yml
+  tags: [k3s, longhorn, storage, install]
+
+- name: Setup k3s Multi-Controller Cluster with etcd
+  import_playbook: playbooks/infrastructure/k3s-controller.yml
+  tags: [k3s, etcd, controllers, install]
+
+- name: Setup k3s Agent Nodes
+  import_playbook: playbooks/infrastructure/k3s-agent.yml
+  tags: [k3s, agents, install]
+
+- name: Post-K3s Setup
+  import_playbook: playbooks/infrastructure/post-k3s.yml
+  tags: [k3s, install, post-setup]

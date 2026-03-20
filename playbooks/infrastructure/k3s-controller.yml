@@ -1,0 +1,247 @@
+---
+# k3s Controller Setup
+# This playbook sets up a k3s controller node with etcd
+# Run with: ansible-playbook -i inventory.ini k3s-controller.yml
+
+- name: Setup k3s Controller Node
+  hosts: controllers
+  become: yes
+  gather_facts: yes
+  serial: [1, "{{ groups['controllers'] | length - 1 }}"]  # Run first controller alone, then rest in parallel
+  tags: [k3s, etcd, controllers, install]
+
+  vars:
+    # k3s configuration
+    k3s_version: "v1.33.5+k3s1"
+    k3s_data_dir: "/var/lib/rancher/k3s"
+    etcd_data_dir: "/var/lib/rancher/k3s/server/db"
+    
+    # ArgoCD configuration
+    argocd_version: "8.6.0"
+    argocd_namespace: "default"
+    argocd_release_name: "argocd"
+    
+    # Local user configuration
+    local_user: "{{ ansible_user | default('alex') }}"
+    
+    # Network configuration
+    cluster_cidr: "10.42.0.0/16"
+    service_cidr: "10.43.0.0/16"
+    cluster_dns: "10.43.0.10"
+    
+    # Controller configuration
+    controller_ips: "{{ groups['controllers'] | map('extract', hostvars, 'ansible_host') | list }}"
+    first_controller: "{{ groups['controllers'][0] }}"
+    is_first_controller: "{{ inventory_hostname == first_controller }}"
+    
+    # Cluster replacement protection (defaults to false if not set)
+    replace_cluster_bool: "{{ replace_cluster | default(false) | bool }}"
+    
+
+  pre_tasks:
+    - name: Check if etcd data directory exists
+      stat:
+        path: "{{ etcd_data_dir }}"
+      register: etcd_exists
+
+    - name: Check if k3s is already running
+      systemd:
+        name: k3s
+      register: k3s_running
+      ignore_errors: yes
+
+    - name: Set k3s token from environment variable
+      set_fact:
+        k3s_token: "{{ ansible_env.K3S_TOKEN }}"
+      when: ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
+
+    - name: Validate k3s token is set (only required when replacing)
+      fail:
+        msg: "k3s_token must be set when replace_cluster=true. Use -e k3s_token=your-token, set K3S_TOKEN env var, or set it in group_vars"
+      when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
+
+    - name: Check if k3s token file exists on first controller
+      stat:
+        path: /var/lib/rancher/k3s/server/token
+      register: existing_token_file
+      when: is_first_controller
+      tags: [validation]
+
+    - name: Get existing cluster token from first controller
+      shell: cat /var/lib/rancher/k3s/server/token
+      register: existing_token
+      when: is_first_controller and existing_token_file.stat.exists
+      changed_when: false
+      tags: [validation]
+
+    - name: Validate token matches existing cluster (first controller)
+      fail:
+        msg: |
+          ========================================
+          ❌ TOKEN MISMATCH DETECTED! ❌
+          ========================================
+          The provided k3s_token does not match the existing cluster token.
+          
+          Current cluster token: {{ existing_token.stdout }}
+          Provided token: {{ k3s_token }}
+          
+          To fix this, get the correct token from the first controller:
+          ssh {{ ansible_host }} "sudo cat /var/lib/rancher/k3s/server/token"
+          
+          Then re-run the playbook with the correct token:
+          ansible-playbook -i inventory.ini k3s-controller.yml -e k3s_token=CORRECT_TOKEN
+          ========================================
+      when: 
+        - is_first_controller
+        - existing_token_file.stat.exists
+        - existing_token.stdout != k3s_token
+      tags: [validation]
+
+    - name: Create k3s data directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ k3s_data_dir }}"
+        - "{{ etcd_data_dir }}"
+        - "/etc/rancher/k3s"
+      tags: [k3s, directories]
+
+    - name: Check if k3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+      tags: [k3s, check]
+
+    - name: Uninstall existing k3s (when replacing cluster)
+      shell: |
+        # Use official k3s uninstall script
+        /usr/local/bin/k3s-uninstall.sh || true
+        
+        # Also remove any remaining k3s-agent if it exists
+        /usr/local/bin/k3s-agent-uninstall.sh || true
+        
+        echo "k3s completely uninstalled using official scripts"
+      when: replace_cluster_bool and k3s_installed.stat.exists
+      tags: [k3s, uninstall]
+
+    - name: Download and install k3s (first controller - cluster init)
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        INSTALL_K3S_EXEC="server --cluster-init -disable=traefik --flannel-backend none" \
+        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+      when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
+      tags: [k3s, install]
+
+    - name: Wait for first controller to be ready (for additional controllers)
+      wait_for:
+        host: "{{ hostvars[first_controller]['ansible_host'] }}"
+        port: 6443
+        timeout: 300
+        delay: 10
+      when: not is_first_controller
+      tags: [k3s, wait]
+
+    - name: Download and install k3s (additional controllers - join cluster)
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        INSTALL_K3S_EXEC="server -disable=traefik --flannel-backend none" \
+        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+        K3S_URL=https://{{ hostvars[first_controller]['ansible_host'] }}:6443 sh -
+      when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and not is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
+      ignore_errors: yes
+      register: k3s_install_result
+      tags: [k3s, install]
+
+    - name: Configure k3s server
+      template:
+        src: k3s-server-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [k3s, config]
+    
+    - name: Deploy k3s systemd service
+      template:
+        src: k3s.service.j2
+        dest: /etc/systemd/system/k3s.service
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify: Reload systemd
+      tags: [k3s, systemd]
+
+    - name: Start and enable k3s service
+      systemd:
+        name: k3s
+        state: started
+        enabled: yes
+      ignore_errors: yes
+      register: k3s_start_result
+      tags: [k3s, service]
+
+    - name: Wait for k3s API to be ready
+      shell: |
+        curl -k -s -o /dev/null -w "%{http_code}" https://{{ ansible_host }}:6443/healthz
+      register: k3s_health_check
+      until: k3s_health_check.rc == 0 and (k3s_health_check.stdout == "200" or k3s_health_check.stdout == "401")
+      retries: 30
+      delay: 5
+      tags: [k3s, wait]
+
+    - name: Ensure ~/.kube exists locally
+      ansible.builtin.file:
+        path: "/home/{{ local_user }}/.kube"
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+      run_once: true
+    
+    - name: Pull kubeconfig from first controller to local ~/.kube/config
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "/home/{{ local_user }}/.kube/config"
+        flat: true
+      become: true                # needed on the REMOTE to read k3s.yaml
+      when: is_first_controller
+      run_once: true
+    
+    - name: Point server to controller IP in local kubeconfig
+      ansible.builtin.replace:
+        path: "/home/{{ local_user }}/.kube/config"
+        regexp: '^\s*server:.*$'
+        replace: "    server: https://{{ hostvars[first_controller].ansible_host | default(controller_ips[0]) }}:6443"
+      delegate_to: localhost
+      become: false
+      run_once: true
+    
+    - name: Fix local kubeconfig perms
+      ansible.builtin.file:
+        path: "/home/{{ local_user }}/.kube/config"
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+
+
+  handlers:
+    - name: restart k3s
+      systemd:
+        name: k3s
+        state: restarted
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+

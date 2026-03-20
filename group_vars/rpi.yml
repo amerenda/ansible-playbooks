@@ -1,0 +1,38 @@
+# Group Variables for Raspberry Pi 5 k3s + Longhorn Cluster
+# Customize these values for your environment
+
+# User configuration
+target_user: "{{ ansible_user }}"
+
+# SSH key for admin access - not needed as keys are pre-installed in the image
+
+# Base packages required for k3s + Longhorn
+base_packages:
+  - curl
+  - vim
+  - git
+  - jq
+  - htop
+  - nfs-common
+  - util-linux
+  - open-iscsi
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+
+# Kernel modules required for Longhorn
+kernel_modules:
+  - nfs
+  - iscsi_tcp
+
+# Optional: Set to "yes" to run apt upgrade (default: no for safety)
+do_upgrade: "no"
+
+# Longhorn-specific settings
+longhorn_iscsi_service: "iscsid"
+longhorn_iscsi_enable: true
+
+# System configuration
+timezone: "America/New_York"
+locale: "en_US.UTF-8"

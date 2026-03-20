@@ -1,0 +1,122 @@
+---
+# k3s Worker Setup
+# This playbook sets up a k3s worker node
+# Run with: ansible-playbook -i inventory.ini k3s-worker.yml
+
+- name: Setup k3s Agent Node
+  hosts: agents
+  become: yes
+  gather_facts: yes
+  tags: [k3s, agent, install]
+
+  vars:
+    k3s_version: "v1.33.5+k3s1"
+    k3s_server_ip: "{{ hostvars[groups['controllers'][0]]['ansible_host'] }}"
+    replace_cluster_bool: "{{ (replace_cluster | default(false)) | bool }}"
+    
+
+  pre_tasks:
+    - name: Check if k3s agent is already running
+      systemd:
+        name: k3s-agent
+      register: k3s_agent_running
+      ignore_errors: yes
+
+    - name: Display k3s agent protection warning
+      debug:
+        msg: |
+          ⚠️  WARNING: k3s agent already running! ⚠️
+          ========================================
+          k3s-agent service status: {{ 'running' if k3s_agent_running.status.ActiveState == 'active' else 'stopped' }}
+          ========================================
+          To overwrite existing agent, use: -e replace_cluster_bool=true
+          ========================================
+      when: k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool
+
+    - name: Display overwrite warning
+      debug:
+        msg: |
+          ⚠️  WARNING: OVERWRITING EXISTING K3S AGENT! ⚠️
+          ========================================
+          This will restart the k3s agent service!
+          ========================================
+      when: replace_cluster_bool
+
+    - name: Skip k3s agent installation if already running
+      debug:
+        msg: "k3s agent already running, skipping installation. Use -e replace_cluster_bool=true to overwrite."
+      when: k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool
+
+    - name: Set k3s token from environment variable
+      set_fact:
+        k3s_token: "{{ ansible_env.K3S_TOKEN }}"
+      when: ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
+
+    - name: Validate k3s token is set (only required when replacing)
+      fail:
+        msg: "k3s_token must be set when replace_cluster=true. Use -e k3s_token=your-token, set K3S_TOKEN env var, or set it in group_vars"
+      when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
+
+  tasks:
+    - name: Create k3s data directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "/etc/rancher/k3s"
+      tags: [k3s, directories]
+
+    - name: Check if k3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+      tags: [k3s, check]
+
+    - name: Download and install k3s agent
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ k3s_server_ip }}:6443 K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" INSTALL_K3S_VERSION="{{ k3s_version }}" sh -
+      when: not k3s_installed.stat.exists and not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
+      tags: [k3s, install]
+
+    - name: Stop k3s agent service if running (for reconfiguration)
+      systemd:
+        name: k3s-agent
+        state: stopped
+      when: k3s_installed.stat.exists and not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
+      tags: [k3s, stop]
+
+    - name: Configure k3s agent
+      template:
+        src: k3s-agent-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
+      tags: [k3s, config]
+
+    - name: Start and enable k3s agent service
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      when: not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
+      tags: [k3s, service]
+
+    - name: Wait for node to join cluster
+      wait_for:
+        port: 10250
+        host: "{{ ansible_host }}"
+        timeout: 300
+      tags: [k3s, wait]
+
+
+  handlers:
+    - name: restart k3s-agent
+      systemd:
+        name: k3s-agent
+        state: restarted
