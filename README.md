@@ -1,120 +1,105 @@
-# Ansible K3s Cluster Setup
+# ansible-playbooks
 
-This directory contains Ansible playbooks for setting up a high-availability K3s cluster on Raspberry Pi nodes.
+Ansible playbooks for provisioning and managing a high-availability k3s cluster on Raspberry Pi nodes.
 
-## 📁 Directory Structure
+## Cluster Inventory
 
-```
-ansible/
-├── playbooks/                    # Main playbooks
-│   ├── infrastructure/          # Infrastructure setup
-│   │   ├── setup-rpi.yml       # Raspberry Pi node preparation
-│   │   ├── k3s-controller.yml  # K3s controller setup
-│   │   ├── k3s-worker.yml      # K3s worker setup
-│   │   └── longhorn-storage.yml # Longhorn storage configuration
-│   └── applications/            # Application deployment
-│       └── post-k3s-setup.yml  # Post-K3s setup tasks
-├── roles/                       # Reusable Ansible roles
-├── group_vars/                  # Group variables
-├── inventory/                   # Inventory files
-│   └── inventory.ini
-├── templates/                   # Jinja2 templates
-└── all.yml                     # Master playbook
-```
+| Host | Role | IP |
+|------|------|----|
+| rpi5-0 | Controller | 10.100.20.10 |
+| rpi5-1 | Controller | 10.100.20.11 |
+| rpi4-0 | Controller | 10.100.20.12 |
+| rpi3-0 | Agent (worker) + storage-only | 10.100.20.13 |
 
-## 🚀 Quick Start
+All nodes are accessed as user `alex` with SSH key `~/.ssh/alex_id_ed25519`.
 
-### Prerequisites
+## Prerequisites
+
 - Ansible installed on your control machine
-- SSH access to all Raspberry Pi nodes
-- K3S_TOKEN environment variable set
+- SSH access to all Raspberry Pi nodes (key-based)
+- `K3S_TOKEN` environment variable set for cluster join token
 
-### Run the Complete Setup
+## Directory Structure
+
+```
+ansible-playbooks/
+├── all.yml                          Master playbook (runs everything)
+├── inventory/
+│   └── inventory.ini                Node inventory with groups and vars
+├── group_vars/                      Group-level variables
+├── playbooks/
+│   ├── infrastructure/
+│   │   ├── setup-rpi.yml            OS-level Raspberry Pi preparation
+│   │   ├── k3s-controller.yml       Install k3s server on controller nodes
+│   │   ├── k3s-agent.yml            Install k3s agent on worker nodes
+│   │   ├── longhorn-storage.yml     Configure Longhorn storage labels/taints
+│   │   ├── post-k3s.yml             Post-install cluster configuration
+│   │   └── templates/               Jinja2 templates for config files
+│   └── applications/
+│       └── post-k3s-setup.yml       Final verification and summary
+```
+
+## Usage
+
+### Full cluster setup
+
 ```bash
-# Run the entire cluster setup
 ansible-playbook -i inventory/inventory.ini all.yml
+```
 
-# Run specific components
+### Run individual playbooks
+
+```bash
+# Prepare Raspberry Pi nodes (networking, packages, iSCSI)
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-rpi.yml
+
+# Install k3s on controllers (HA with etcd)
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-controller.yml
+
+# Join worker nodes
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-agent.yml
+
+# Configure Longhorn storage
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/longhorn-storage.yml
+
+# Post-install tasks and verification
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/post-k3s.yml
+ansible-playbook -i inventory/inventory.ini playbooks/applications/post-k3s-setup.yml
 ```
 
-## 📋 Playbook Descriptions
-
-### Infrastructure Playbooks
-
-#### `setup-rpi.yml`
-- Prepares Raspberry Pi nodes for K3s
-- Configures static IP and DNS
-- Installs required packages
-- Sets up iSCSI for Longhorn
-- Applies Longhorn storage labels
-
-#### `k3s-controller.yml`
-- Installs K3s on controller nodes
-- Sets up etcd for HA
-- Creates HA kubeconfig with all controller endpoints
-- Installs ArgoCD for GitOps
-
-#### `k3s-worker.yml`
-- Installs K3s agent on worker nodes
-- Joins workers to the cluster
-
-#### `longhorn-storage.yml`
-- Applies Longhorn taints and labels to storage nodes
-- Configures node selectors for Longhorn components
-
-### Application Playbooks
-
-#### `post-k3s-setup.yml`
-- Post-installation tasks
-- Cluster verification
-- Summary display
-
-## 🔧 Configuration
-
-### Environment Variables
-```bash
-export K3S_TOKEN="your-k3s-token-here"
-```
-
-### Inventory
-Edit `inventory/inventory.ini` to configure your nodes:
-```ini
-[controllers]
-rpi5-0 ansible_host=10.100.20.10
-rpi5-1 ansible_host=10.100.20.11
-rpi5-2 ansible_host=10.100.20.12
-
-[workers]
-rpi4-0 ansible_host=10.100.20.20
-rpi3-0 ansible_host=10.100.20.30
-
-[longhorn_storage]
-rpi4-0 ansible_host=10.100.20.20
-```
-
-## 🏷️ Tags
-
-Use tags to run specific parts of the setup:
+### Use tags to run specific stages
 
 ```bash
-# Network configuration only
 ansible-playbook -i inventory/inventory.ini all.yml --tags network
-
-# K3s installation only
 ansible-playbook -i inventory/inventory.ini all.yml --tags k3s
-
-# Longhorn setup only
 ansible-playbook -i inventory/inventory.ini all.yml --tags longhorn
 ```
 
-## 🔄 High Availability
+## Playbook Descriptions
 
-The kubeconfig is automatically configured with all controller endpoints for round-robin load balancing. If one controller goes offline, kubectl will automatically try the next available controller.
+### Infrastructure
 
-## 📝 Notes
+| Playbook | Description |
+|----------|-------------|
+| `setup-rpi.yml` | Configures static IP, DNS, required packages, iSCSI for Longhorn, and storage labels |
+| `k3s-controller.yml` | Installs k3s server with etcd HA, creates kubeconfig with all controller endpoints, installs ArgoCD |
+| `k3s-agent.yml` | Installs k3s agent and joins workers to the cluster |
+| `longhorn-storage.yml` | Applies taints, labels, and node selectors for Longhorn components |
+| `post-k3s.yml` | Post-installation cluster configuration |
+
+### Applications
+
+| Playbook | Description |
+|----------|-------------|
+| `post-k3s-setup.yml` | Cluster verification and setup summary |
+
+## High Availability
+
+The kubeconfig is automatically configured with all controller endpoints for round-robin load balancing. If one controller goes down, kubectl falls through to the next available controller.
+
+## Notes
 
 - All playbooks use `become: no` for kubectl operations to avoid sudo prompts
 - Longhorn storage labels are applied to all nodes for simplified scheduling
-- The setup includes static IP configuration for reliable networking
+- The `storage_only` group (`rpi3-0`) identifies nodes dedicated to storage workloads
+- After Ansible completes, apply the bootstrap secrets and root application from the `k3s-dean-gitops` repo to finish cluster setup
