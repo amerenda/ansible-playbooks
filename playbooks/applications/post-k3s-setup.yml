@@ -12,6 +12,10 @@
 
   vars:
     kubeconfig_path: "/home/alex/.kube/config"
+    gitops_repo: "https://github.com/amerenda/k3s-dean-gitops.git"
+    gitops_local_path: "/tmp/k3s-dean-gitops"
+    k3s_runners_repo: "https://github.com/amerenda/k3s-runners.git"
+    k3s_runners_local_path: "/tmp/k3s-runners"
 
   pre_tasks:
     - name: Check if kubeconfig exists
@@ -65,7 +69,7 @@
         chart_version: "{{ argocd_version }}"
         kubeconfig: "/home/{{ local_user }}/.kube/config"
         values_files:
-          - "{{ playbook_dir | dirname| dirname | dirname }}/bootstrap/argocd/values.yaml"
+          - "{{ gitops_local_path }}/bootstrap/argocd/values.yaml"
         wait: true
         timeout: 300s
       when: is_first_controller
@@ -87,17 +91,85 @@
       remote_user: "{{ local_user }}"
       tags: [argocd, wait]
 
+    - name: Clone gitops repo
+      git:
+        repo: "{{ gitops_repo }}"
+        dest: "{{ gitops_local_path }}"
+        version: main
+        force: yes
+      delegate_to: localhost
+      become: no
+      tags: [argocd, bootstrap]
+
+    - name: Clone k3s-runners repo
+      git:
+        repo: "{{ k3s_runners_repo }}"
+        dest: "{{ k3s_runners_local_path }}"
+        version: main
+        force: yes
+      delegate_to: localhost
+      become: no
+      tags: [runners, bootstrap]
+
+    - name: Apply ArgoCD AppProjects
+      shell: |
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/bootstrap/appprojects.yaml"
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, projects, bootstrap]
+
+    - name: Apply ArgoCD repo secret (GitHub PAT for SHA-based git fetch)
+      shell: |
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/bootstrap/argocd-repo-secret.yaml"
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Apply Bitwarden credentials secret
+      shell: |
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/bootstrap/bitwarden-credentials-secret.yaml"
+      when: is_first_controller
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Build and push kaniko runner image
+      shell: |
+        cd "{{ k3s_runners_local_path }}"
+        docker build -t amerenda/k3s-runners:kaniko ./kaniko
+        docker push amerenda/k3s-runners:kaniko
+      delegate_to: localhost
+      become: no
+      remote_user: "{{ local_user }}"
+      tags: [runners, kaniko, bootstrap]
+      ignore_errors: yes  # Non-fatal if Docker Hub auth isn't set up yet
+
     - name: Apply root-app.yaml to bootstrap GitOps
       shell: |
-        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ playbook_dir | dirname | dirname | dirname }}/gitops/root-app.yaml"
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/root-app.yaml"
       when: is_first_controller
       delegate_to: localhost
       become: no
       remote_user: "{{ local_user }}"
       tags: [argocd, gitops, bootstrap]
 
-    - name: Display ArgoCD installation reminder
+    - name: Display post-bootstrap checklist
       debug:
-        msg: "ArgoCD installation complete! Remember to bootstrap Bitwarden credentials: kubectl apply -f bootstrap/bitwarden-credentials-secret.yaml"
+        msg: |
+          Bootstrap complete! Verify:
+          1. ArgoCD UI: https://argocd.amer.dev
+          2. All apps syncing: kubectl get applications -A
+          3. Secrets syncing: kubectl get externalsecrets -A
+          4. Runners online: kubectl get autoscalingrunnerset -A
+
+          Manual steps if not done:
+          - Update bootstrap/argocd-repo-secret.yaml with your GITOPS_PAT
+          - Update bootstrap/bitwarden-credentials-secret.yaml with your Bitwarden token
+          - Set GitHub repo secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, GITOPS_PAT) on app repos
       when: is_first_controller
       tags: [argocd, reminder]
