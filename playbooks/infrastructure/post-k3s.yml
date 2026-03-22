@@ -59,6 +59,15 @@
       loop: "{{ longhorn_labels }}"
       tags: [k3s, labels, longhorn]
 
+    # NODE ROLE LABEL (can't be set via kubelet --node-labels, must use kubectl)
+    - name: Add node-role label to storage_only nodes
+      shell: |
+        kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/longhorn-storage=true --overwrite
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['storage_only'] | default([]))
+      tags: [k3s, labels, longhorn]
+
     # STORAGE ONLY TAINTS
     - name: Add Longhorn-only taints to storage_only nodes
       shell: |
