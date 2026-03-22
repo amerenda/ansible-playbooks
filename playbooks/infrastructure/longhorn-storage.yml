@@ -17,9 +17,10 @@
     # Longhorn-specific packages
     longhorn_packages:
       - nfs-common
-      - libisns0 
-      - libopeniscsiusr 
+      - libisns0
+      - libopeniscsiusr
       - open-iscsi
+      - cryptsetup-bin
     
     # Longhorn service configuration
     longhorn_iscsi_service: "iscsid"
@@ -29,6 +30,7 @@
     kernel_modules:
       - nfs
       - iscsi_tcp
+      - dm_crypt
 
   pre_tasks:
     - name: Check if k3s is installed
