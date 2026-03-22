@@ -11,6 +11,7 @@
       - "longhorn:NoSchedule"
     longhorn_labels:
       - "longhorn-storage=true"
+      - "longhorn.io/storage=true"
     rpi5_labels:
       - "rpi5-host=true"
     flannel_taints:
@@ -94,6 +95,23 @@
       when: inventory_hostname not in (groups['storage_only'] | default([]))
       loop: "{{ flannel_taints }}"
       tags: [k3s, taints]
+
+    # LONGHORN NODE SCHEDULING
+    - name: Enable Longhorn scheduling on storage nodes
+      shell: |
+        kubectl patch nodes.longhorn.io -n default {{ inventory_hostname }} --type merge -p '{"spec":{"allowScheduling":true}}' 2>/dev/null || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname in (groups['storage'] | default([]))
+      tags: [k3s, longhorn, storage]
+
+    - name: Disable Longhorn scheduling on non-storage nodes
+      shell: |
+        kubectl patch nodes.longhorn.io -n default {{ inventory_hostname }} --type merge -p '{"spec":{"allowScheduling":false}}' 2>/dev/null || true
+      delegate_to: localhost
+      become: no
+      when: inventory_hostname not in (groups['storage'] | default([]))
+      tags: [k3s, longhorn, storage]
 
     - name: Add rpi5 hosts labels to rpi5 hosts
       shell: |
