@@ -171,7 +171,7 @@
       tags: [mini-docker]
 
     - name: Start Colima with resources
-      shell: /opt/homebrew/bin/colima start --cpu 4 --memory 8 --arch aarch64 --vm-type vz --mount-type virtiofs
+      shell: eval "$(/opt/homebrew/bin/brew shellenv)" && colima start --cpu 4 --memory 8 --arch aarch64 --vm-type vz --mount-type virtiofs
       when: colima_status.rc != 0
       become: no
       tags: [mini-docker]
