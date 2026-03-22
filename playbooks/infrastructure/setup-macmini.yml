@@ -148,7 +148,9 @@
 
     - name: Start Tailscale daemon
       become: no
-      command: /opt/homebrew/bin/brew services start tailscale
+      shell: sudo /opt/homebrew/bin/brew services start tailscale
+      environment:
+        HOMEBREW_SERVICES_NO_DOMAIN_WARNING: "1"
       when: tailscale_status.rc != 0
       tags: [mini-tailscale]
 
