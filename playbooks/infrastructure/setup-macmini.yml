@@ -147,7 +147,7 @@
       tags: [mini-tailscale]
 
     - name: Start Tailscale daemon
-      become: yes
+      become: no
       command: /opt/homebrew/bin/brew services start tailscale
       when: tailscale_status.rc != 0
       tags: [mini-tailscale]
