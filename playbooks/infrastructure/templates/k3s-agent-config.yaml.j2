@@ -16,10 +16,12 @@ data-dir: "/var/lib/rancher/k3s"
 log: "/var/log/k3s-agent.log"
 
 # Kubelet configuration for Longhorn-only node
+# Memory reservations are tuned per-node via group_vars (default 128Mi
+# for sub-1GB nodes like rpi3-0, 256Mi for larger nodes)
 kubelet-arg:
   - "max-pods=110"
-  - "kube-reserved=cpu=100m,memory=256Mi"
-  - "system-reserved=cpu=100m,memory=256Mi"
+  - "kube-reserved=cpu={{ k3s_agent_kube_reserved_cpu | default('50m') }},memory={{ k3s_agent_kube_reserved_mem | default('128Mi') }}"
+  - "system-reserved=cpu={{ k3s_agent_system_reserved_cpu | default('50m') }},memory={{ k3s_agent_system_reserved_mem | default('128Mi') }}"
   - "eviction-hard=memory.available<100Mi"
   - "eviction-soft=memory.available<200Mi"
   - "eviction-soft-grace-period=memory.available=2m"
