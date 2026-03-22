@@ -68,6 +68,13 @@
       become: no
       tags: [mini-homebrew]
 
+    - name: Install Homebrew casks (OrbStack)
+      community.general.homebrew_cask:
+        name: "{{ homebrew_casks }}"
+        state: present
+      become: no
+      tags: [mini-homebrew]
+
     # ─── System ────────────────────────────────────────────────────────────
     - name: Set timezone
       become: yes
@@ -163,81 +170,34 @@
             tailscale up --accept-routes
       tags: [mini-tailscale]
 
-    # ─── Docker (Colima) ───────────────────────────────────────────────────
-    - name: Check if Colima is running
-      shell: /opt/homebrew/bin/colima status 2>&1
-      register: colima_status
+    # ─── Docker (OrbStack) ──────────────────────────────────────────────────
+    - name: Check if OrbStack Docker is running
+      shell: /opt/homebrew/bin/docker info 2>&1
+      register: docker_status
       failed_when: false
       changed_when: false
       become: no
       tags: [mini-docker]
 
-    - name: Start Colima with resources
-      shell: eval "$(/opt/homebrew/bin/brew shellenv)" && colima start --cpu 4 --memory 8 --arch aarch64 --vm-type vz --mount-type virtiofs
-      when: colima_status.rc != 0
+    - name: Start OrbStack
+      shell: open -a OrbStack --background 2>/dev/null || /Applications/OrbStack.app/Contents/MacOS/OrbStack start 2>/dev/null
+      when: docker_status.rc != 0
       become: no
+      failed_when: false
       tags: [mini-docker]
 
-    - name: Install docker-compose plugin (v2)
-      shell: |
-        mkdir -p ~/.docker/cli-plugins
-        ln -sf /opt/homebrew/bin/docker-compose ~/.docker/cli-plugins/docker-compose
-      become: no
-      tags: [mini-docker]
-
-    - name: Verify Docker is working
+    - name: Wait for Docker to be ready
       shell: /opt/homebrew/bin/docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
       register: docker_version
       become: no
+      retries: 10
+      delay: 3
+      until: docker_version.rc == 0
       tags: [mini-docker]
 
     - name: Show Docker version
       debug:
         msg: "Docker version: {{ docker_version.stdout }}"
-      tags: [mini-docker]
-
-    - name: Create Colima auto-start launchd plist
-      copy:
-        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
-        mode: '0644'
-        content: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>Label</key>
-            <string>com.amerenda.colima</string>
-            <key>ProgramArguments</key>
-            <array>
-              <string>/opt/homebrew/bin/colima</string>
-              <string>start</string>
-              <string>--cpu</string>
-              <string>4</string>
-              <string>--memory</string>
-              <string>8</string>
-              <string>--arch</string>
-              <string>aarch64</string>
-              <string>--vm-type</string>
-              <string>vz</string>
-              <string>--mount-type</string>
-              <string>virtiofs</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>StandardOutPath</key>
-            <string>/tmp/colima-start.log</string>
-            <key>StandardErrorPath</key>
-            <string>/tmp/colima-start.err</string>
-          </dict>
-          </plist>
-      become: no
-      tags: [mini-docker]
-
-    - name: Load Colima auto-start plist
-      shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
-      become: no
-      changed_when: false
-      failed_when: false
       tags: [mini-docker]
 
     # ─── Compose Repo ──────────────────────────────────────────────────────
@@ -363,18 +323,16 @@
           ════════════════════════════════════════
 
           Host: {{ macmini_ip }}
-          Secondary IP: {{ macmini_pihole_ip }} (Pihole)
-          Docker: {{ docker_version.stdout | default('not started') }}
+          Docker: {{ docker_version.stdout | default('not started') }} (OrbStack)
           Compose repo: {{ compose_dir }}
 
           Auto-start on boot:
-            - Secondary IP alias (launchd)
-            - Colima (launchd)
+            - OrbStack (auto-starts on login)
             - Docker Compose (launchd, 30s delay)
 
           Next steps:
             1. Configure .env and TSIG key (see warnings above)
-            2. SSH in and run: tailscale up --accept-routes
+            2. SSH in and run: tailscale up --accept-routes --ssh
             3. Re-run with --tags mini-services to start everything
 
           ════════════════════════════════════════

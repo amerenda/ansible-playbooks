@@ -12,10 +12,12 @@ homebrew_packages:
   - git
   - jq
   - htop
-  - colima
-  - docker
-  - docker-compose
   - tailscale
+
+# OrbStack replaces Colima — native macOS Docker runtime
+# Supports direct host IP binding (needed for DNS on port 53)
+homebrew_casks:
+  - orbstack
 
 # Compose repo
 compose_repo: "https://github.com/amerenda/mac-mini-compose.git"
