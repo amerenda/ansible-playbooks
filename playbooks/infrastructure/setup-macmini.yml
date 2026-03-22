@@ -31,6 +31,9 @@
   collections:
     - community.general
 
+  vars_files:
+    - ../../group_vars/macmini.yml
+
   vars:
     target_user: "{{ ansible_user }}"
     macmini_hostname: "macmini"
