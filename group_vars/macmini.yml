@@ -3,8 +3,8 @@
 # Core services host — BIND9, Pihole, Home Assistant, Whisper
 
 # Network
-macmini_ip: "10.100.20.30"
-macmini_pihole_ip: "10.100.20.31"
+macmini_ip: "10.100.20.18"
+macmini_pihole_ip: "10.100.20.19"
 gateway: "10.100.20.1"
 
 # Homebrew packages
