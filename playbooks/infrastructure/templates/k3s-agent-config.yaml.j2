@@ -25,6 +25,8 @@ kubelet-arg:
   - "eviction-soft-grace-period=memory.available=2m"
 
 # Node labels for Longhorn
+# Note: node-role.kubernetes.io/* labels can't be set via kubelet --node-labels
+# (reserved prefix). Apply them via kubectl in post-k3s.yml instead.
 node-label:
   - "longhorn.io/storage=true"
-  - "node-role.kubernetes.io/longhorn-storage=true"
+  - "longhorn-storage=true"
