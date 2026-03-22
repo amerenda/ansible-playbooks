@@ -178,6 +178,13 @@
       become: no
       tags: [mini-docker]
 
+    - name: Install docker-compose plugin (v2)
+      shell: |
+        mkdir -p ~/.docker/cli-plugins
+        ln -sf /opt/homebrew/bin/docker-compose ~/.docker/cli-plugins/docker-compose
+      become: no
+      tags: [mini-docker]
+
     - name: Verify Docker is working
       shell: /opt/homebrew/bin/docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
       register: docker_version
