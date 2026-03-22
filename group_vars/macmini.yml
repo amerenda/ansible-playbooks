@@ -1,0 +1,25 @@
+---
+# Group Variables for Mac Mini M4
+# Core services host — BIND9, Pihole, Home Assistant, Whisper
+
+# Network
+macmini_ip: "10.100.20.30"
+macmini_pihole_ip: "10.100.20.31"
+gateway: "10.100.20.1"
+
+# Homebrew packages
+homebrew_packages:
+  - git
+  - jq
+  - htop
+  - colima
+  - docker
+  - docker-compose
+  - tailscale
+
+# Compose repo
+compose_repo: "git@github.com:amerenda/mac-mini-compose.git"
+compose_dir: "/Users/alex/mac-mini-compose"
+
+# System
+timezone: "America/New_York"

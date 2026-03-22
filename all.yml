@@ -22,3 +22,9 @@
 - name: Post-K3s Setup
   import_playbook: playbooks/infrastructure/post-k3s.yml
   tags: [k3s, install, post-setup]
+
+# Mac Mini — standalone host, not part of k3s cluster
+# Run standalone: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+- name: Setup Mac Mini M4 (core services)
+  import_playbook: playbooks/infrastructure/setup-macmini.yml
+  tags: [macmini]

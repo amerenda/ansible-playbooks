@@ -1,0 +1,359 @@
+---
+# Mac Mini M4 Setup Playbook
+# Prepares the Mac Mini for running core home lab services via Docker Compose
+# Assumes: macOS with SSH enabled, user 'alex' exists
+#
+# Run with:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+#
+# Tags:
+#   homebrew   — Install Homebrew and packages
+#   network    — Static IP and secondary IP alias
+#   docker     — Colima + Docker setup
+#   tailscale  — Tailscale VPN setup
+#   compose    — Clone and configure compose repo
+#   services   — Start Docker Compose services
+#   all        — Everything
+
+- name: Setup Mac Mini M4 for core services
+  hosts: macmini
+  gather_facts: yes
+  tags: [macmini]
+
+  vars:
+    target_user: "{{ ansible_user }}"
+
+  tasks:
+    # ─── Homebrew ──────────────────────────────────────────────────────────
+    - name: Check if Homebrew is installed
+      stat:
+        path: /opt/homebrew/bin/brew
+      register: homebrew_check
+      tags: [homebrew]
+
+    - name: Install Homebrew
+      shell: |
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      when: not homebrew_check.stat.exists
+      become: no
+      tags: [homebrew]
+
+    - name: Ensure Homebrew is in PATH (zprofile)
+      lineinfile:
+        path: "/Users/{{ target_user }}/.zprofile"
+        line: 'eval "$(/opt/homebrew/bin/brew shellenv)"'
+        create: yes
+      become: no
+      tags: [homebrew]
+
+    - name: Install Homebrew packages
+      community.general.homebrew:
+        name: "{{ homebrew_packages }}"
+        state: present
+      become: no
+      tags: [homebrew]
+
+    # ─── System ────────────────────────────────────────────────────────────
+    - name: Set timezone
+      become: yes
+      command: systemsetup -settimezone "{{ timezone }}"
+      changed_when: false
+      tags: [system]
+
+    - name: Set hostname
+      become: yes
+      shell: |
+        scutil --set ComputerName "macmini"
+        scutil --set HostName "macmini"
+        scutil --set LocalHostName "macmini"
+      changed_when: false
+      tags: [system]
+
+    # ─── Network — Secondary IP for Pihole ─────────────────────────────────
+    - name: Get active network interface
+      shell: route -n get default 2>/dev/null | awk '/interface:/{print $2}'
+      register: active_iface
+      changed_when: false
+      tags: [network]
+
+    - name: Check if secondary IP alias exists
+      shell: "ifconfig {{ active_iface.stdout }} | grep -q '{{ macmini_pihole_ip }}'"
+      register: alias_check
+      failed_when: false
+      changed_when: false
+      tags: [network]
+
+    - name: Add secondary IP alias for Pihole
+      become: yes
+      command: "ifconfig {{ active_iface.stdout }} alias {{ macmini_pihole_ip }} 255.255.255.0"
+      when: alias_check.rc != 0
+      tags: [network]
+
+    - name: Create launchd plist for secondary IP (persists across reboot)
+      become: yes
+      copy:
+        dest: /Library/LaunchDaemons/com.amerenda.pihole-alias.plist
+        mode: '0644'
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key>
+            <string>com.amerenda.pihole-alias</string>
+            <key>ProgramArguments</key>
+            <array>
+              <string>/sbin/ifconfig</string>
+              <string>en0</string>
+              <string>alias</string>
+              <string>{{ macmini_pihole_ip }}</string>
+              <string>255.255.255.0</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+          </dict>
+          </plist>
+      tags: [network]
+
+    - name: Load secondary IP launchd plist
+      become: yes
+      command: launchctl load /Library/LaunchDaemons/com.amerenda.pihole-alias.plist
+      changed_when: false
+      failed_when: false
+      tags: [network]
+
+    # ─── Tailscale ─────────────────────────────────────────────────────────
+    - name: Check if Tailscale is running
+      shell: /opt/homebrew/bin/tailscale status 2>&1
+      register: tailscale_status
+      failed_when: false
+      changed_when: false
+      become: no
+      tags: [tailscale]
+
+    - name: Start Tailscale daemon
+      become: yes
+      command: brew services start tailscale
+      when: tailscale_status.rc != 0
+      tags: [tailscale]
+
+    - name: Show Tailscale status
+      debug:
+        msg: |
+          Tailscale status: {{ tailscale_status.stdout_lines | default(['not running — run: tailscale up']) }}
+
+          If not authenticated, SSH into the Mini and run:
+            tailscale up --accept-routes
+      tags: [tailscale]
+
+    # ─── Docker (Colima) ───────────────────────────────────────────────────
+    - name: Check if Colima is running
+      shell: /opt/homebrew/bin/colima status 2>&1
+      register: colima_status
+      failed_when: false
+      changed_when: false
+      become: no
+      tags: [docker]
+
+    - name: Start Colima with resources
+      shell: /opt/homebrew/bin/colima start --cpu 4 --memory 8 --arch aarch64 --vm-type vz --mount-type virtiofs
+      when: colima_status.rc != 0
+      become: no
+      tags: [docker]
+
+    - name: Verify Docker is working
+      shell: /opt/homebrew/bin/docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
+      register: docker_version
+      become: no
+      tags: [docker]
+
+    - name: Show Docker version
+      debug:
+        msg: "Docker version: {{ docker_version.stdout }}"
+      tags: [docker]
+
+    # ─── Compose Repo ──────────────────────────────────────────────────────
+    - name: Check if compose repo exists
+      stat:
+        path: "{{ compose_dir }}/.git"
+      register: compose_repo_check
+      tags: [compose]
+
+    - name: Clone compose repo
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+        accept_hostkey: yes
+      when: not compose_repo_check.stat.exists
+      become: no
+      tags: [compose]
+
+    - name: Pull latest compose repo
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+        update: yes
+      when: compose_repo_check.stat.exists
+      become: no
+      tags: [compose]
+
+    - name: Check if .env exists
+      stat:
+        path: "{{ compose_dir }}/.env"
+      register: env_check
+      tags: [compose]
+
+    - name: Copy .env.example to .env if missing
+      copy:
+        src: "{{ compose_dir }}/.env.example"
+        dest: "{{ compose_dir }}/.env"
+        remote_src: yes
+      when: not env_check.stat.exists
+      become: no
+      tags: [compose]
+
+    - name: Check if TSIG key exists
+      stat:
+        path: "{{ compose_dir }}/bind9/keys/key.conf"
+      register: tsig_check
+      tags: [compose]
+
+    - name: Warn if secrets are not configured
+      debug:
+        msg: |
+          ACTION REQUIRED — configure secrets before starting services:
+
+          1. Edit {{ compose_dir }}/.env
+             Set PIHOLE_WEBPASSWORD from Bitwarden (pihole-admin)
+
+          2. Create {{ compose_dir }}/bind9/keys/key.conf
+             key "externaldns-key." {
+               algorithm hmac-sha256;
+               secret "<from Bitwarden: bind9-tsig-key>";
+             };
+      when: not tsig_check.stat.exists
+      tags: [compose]
+
+    # ─── Start Services ───────────────────────────────────────────────────
+    - name: Start Docker Compose services
+      shell: /opt/homebrew/bin/docker compose up -d
+      args:
+        chdir: "{{ compose_dir }}"
+      become: no
+      when: tsig_check.stat.exists and env_check.stat.exists
+      tags: [services]
+
+    - name: Skip service start (secrets not configured)
+      debug:
+        msg: "Skipping service start — configure .env and TSIG key first, then re-run with --tags services"
+      when: not tsig_check.stat.exists or not env_check.stat.exists
+      tags: [services]
+
+    # ─── Colima auto-start on boot ─────────────────────────────────────────
+    - name: Create Colima auto-start launchd plist
+      copy:
+        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
+        mode: '0644'
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key>
+            <string>com.amerenda.colima</string>
+            <key>ProgramArguments</key>
+            <array>
+              <string>/opt/homebrew/bin/colima</string>
+              <string>start</string>
+              <string>--cpu</string>
+              <string>4</string>
+              <string>--memory</string>
+              <string>8</string>
+              <string>--arch</string>
+              <string>aarch64</string>
+              <string>--vm-type</string>
+              <string>vz</string>
+              <string>--mount-type</string>
+              <string>virtiofs</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>/tmp/colima-start.log</string>
+            <key>StandardErrorPath</key>
+            <string>/tmp/colima-start.err</string>
+          </dict>
+          </plist>
+      become: no
+      tags: [docker]
+
+    - name: Load Colima auto-start plist
+      shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
+      become: no
+      changed_when: false
+      failed_when: false
+      tags: [docker]
+
+    # ─── Compose auto-start after Colima ───────────────────────────────────
+    - name: Create Compose auto-start launchd plist
+      copy:
+        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
+        mode: '0644'
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key>
+            <string>com.amerenda.compose</string>
+            <key>ProgramArguments</key>
+            <array>
+              <string>/bin/bash</string>
+              <string>-c</string>
+              <string>sleep 30 &amp;&amp; cd {{ compose_dir }} &amp;&amp; /opt/homebrew/bin/docker compose up -d</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>/tmp/compose-start.log</string>
+            <key>StandardErrorPath</key>
+            <string>/tmp/compose-start.err</string>
+          </dict>
+          </plist>
+      become: no
+      tags: [services]
+
+    - name: Load Compose auto-start plist
+      shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
+      become: no
+      changed_when: false
+      failed_when: false
+      tags: [services]
+
+    # ─── Summary ───────────────────────────────────────────────────────────
+    - name: Display setup summary
+      debug:
+        msg: |
+          ════════════════════════════════════════
+          Mac Mini Setup Summary
+          ════════════════════════════════════════
+
+          Host: {{ macmini_ip }}
+          Secondary IP: {{ macmini_pihole_ip }} (Pihole)
+          Docker: {{ docker_version.stdout | default('not started') }}
+          Compose repo: {{ compose_dir }}
+
+          Auto-start on boot:
+            - Secondary IP alias (launchd)
+            - Colima (launchd)
+            - Docker Compose (launchd, 30s delay)
+
+          Next steps:
+            1. Configure .env and TSIG key (see warnings above)
+            2. SSH in and run: tailscale up --accept-routes
+            3. Re-run with --tags services to start everything
+
+          ════════════════════════════════════════
+      tags: [summary]
