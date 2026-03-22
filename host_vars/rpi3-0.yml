@@ -1,0 +1,9 @@
+---
+# rpi3-0 — Raspberry Pi 3 (927MB RAM)
+# Storage-only node: runs Longhorn + daemonsets only
+# Minimal reserves to maximize allocatable memory
+
+k3s_agent_kube_reserved_cpu: "50m"
+k3s_agent_kube_reserved_mem: "64Mi"
+k3s_agent_system_reserved_cpu: "50m"
+k3s_agent_system_reserved_mem: "64Mi"
