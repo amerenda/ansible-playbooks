@@ -28,9 +28,12 @@
   hosts: macmini
   gather_facts: yes
   tags: [macmini]
+  collections:
+    - community.general
 
   vars:
     target_user: "{{ ansible_user }}"
+    macmini_hostname: "macmini"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -72,9 +75,9 @@
     - name: Set hostname
       become: yes
       shell: |
-        scutil --set ComputerName "macmini"
-        scutil --set HostName "macmini"
-        scutil --set LocalHostName "macmini"
+        scutil --set ComputerName "{{ macmini_hostname }}"
+        scutil --set HostName "{{ macmini_hostname }}"
+        scutil --set LocalHostName "{{ macmini_hostname }}"
       changed_when: false
       tags: [mini-system]
 
@@ -113,7 +116,7 @@
             <key>ProgramArguments</key>
             <array>
               <string>/sbin/ifconfig</string>
-              <string>en0</string>
+              <string>{{ active_iface.stdout }}</string>
               <string>alias</string>
               <string>{{ macmini_pihole_ip }}</string>
               <string>255.255.255.0</string>

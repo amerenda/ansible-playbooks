@@ -11,11 +11,18 @@
   tags: [post-setup, longhorn, taints]
 
   vars:
-    kubeconfig_path: "/home/alex/.kube/config"
+    local_user: "{{ lookup('env', 'USER') }}"
+    kubeconfig_path: "/home/{{ local_user }}/.kube/config"
     gitops_repo: "https://github.com/amerenda/k3s-dean-gitops.git"
     gitops_local_path: "/tmp/k3s-dean-gitops"
     k3s_runners_repo: "https://github.com/amerenda/k3s-runners.git"
     k3s_runners_local_path: "/tmp/k3s-runners"
+    # ArgoCD settings (must match k3s-controller.yml)
+    argocd_release_name: "argocd"
+    argocd_namespace: "default"
+    argocd_version: "7.8.13"
+    # This playbook runs on localhost, so is_first_controller is always true
+    is_first_controller: true
 
   pre_tasks:
     - name: Check if kubeconfig exists
@@ -170,6 +177,6 @@
           Manual steps if not done:
           - Update bootstrap/argocd-repo-secret.yaml with your GITOPS_PAT
           - Update bootstrap/bitwarden-credentials-secret.yaml with your Bitwarden token
-          - Set GitHub repo secrets (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, GITOPS_PAT) on app repos
+          - Verify runner-ci-credentials ExternalSecrets are synced in arc-runners-* namespaces
       when: is_first_controller
       tags: [argocd, reminder]
