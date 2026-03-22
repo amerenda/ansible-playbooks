@@ -25,6 +25,8 @@
 
 # Mac Mini — standalone host, not part of k3s cluster
 # Run standalone: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+# Via all.yml:  ansible-playbook -i inventory/inventory.ini all.yml --tags macmini
+#               ansible-playbook -i inventory/inventory.ini all.yml --tags mini-docker
 - name: Setup Mac Mini M4 (core services)
   import_playbook: playbooks/infrastructure/setup-macmini.yml
-  tags: [macmini]
+  tags: [macmini, mini-homebrew, mini-system, mini-network, mini-tailscale, mini-docker, mini-compose, mini-services, mini-summary]

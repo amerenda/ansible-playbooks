@@ -3,17 +3,26 @@
 # Prepares the Mac Mini for running core home lab services via Docker Compose
 # Assumes: macOS with SSH enabled, user 'alex' exists
 #
-# Run with:
+# Run all:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
 #
+# Run specific phase:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml --tags mini-docker
+#
+# Via all.yml:
+#   ansible-playbook -i inventory/inventory.ini all.yml --tags macmini
+#   ansible-playbook -i inventory/inventory.ini all.yml --tags mini-network
+#
 # Tags:
-#   homebrew   — Install Homebrew and packages
-#   network    — Static IP and secondary IP alias
-#   docker     — Colima + Docker setup
-#   tailscale  — Tailscale VPN setup
-#   compose    — Clone and configure compose repo
-#   services   — Start Docker Compose services
-#   all        — Everything
+#   macmini         — Everything (play-level)
+#   mini-homebrew   — Install Homebrew and packages
+#   mini-system     — Hostname, timezone
+#   mini-network    — Secondary IP alias for Pihole
+#   mini-tailscale  — Tailscale VPN setup
+#   mini-docker     — Colima + Docker setup + auto-start
+#   mini-compose    — Clone and configure compose repo
+#   mini-services   — Start Docker Compose services + auto-start
+#   mini-summary    — Show setup summary
 
 - name: Setup Mac Mini M4 for core services
   hosts: macmini
@@ -29,14 +38,14 @@
       stat:
         path: /opt/homebrew/bin/brew
       register: homebrew_check
-      tags: [homebrew]
+      tags: [mini-homebrew]
 
     - name: Install Homebrew
       shell: |
         NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
       when: not homebrew_check.stat.exists
       become: no
-      tags: [homebrew]
+      tags: [mini-homebrew]
 
     - name: Ensure Homebrew is in PATH (zprofile)
       lineinfile:
@@ -44,21 +53,21 @@
         line: 'eval "$(/opt/homebrew/bin/brew shellenv)"'
         create: yes
       become: no
-      tags: [homebrew]
+      tags: [mini-homebrew]
 
     - name: Install Homebrew packages
       community.general.homebrew:
         name: "{{ homebrew_packages }}"
         state: present
       become: no
-      tags: [homebrew]
+      tags: [mini-homebrew]
 
     # ─── System ────────────────────────────────────────────────────────────
     - name: Set timezone
       become: yes
       command: systemsetup -settimezone "{{ timezone }}"
       changed_when: false
-      tags: [system]
+      tags: [mini-system]
 
     - name: Set hostname
       become: yes
@@ -67,27 +76,27 @@
         scutil --set HostName "macmini"
         scutil --set LocalHostName "macmini"
       changed_when: false
-      tags: [system]
+      tags: [mini-system]
 
     # ─── Network — Secondary IP for Pihole ─────────────────────────────────
     - name: Get active network interface
       shell: route -n get default 2>/dev/null | awk '/interface:/{print $2}'
       register: active_iface
       changed_when: false
-      tags: [network]
+      tags: [mini-network]
 
     - name: Check if secondary IP alias exists
       shell: "ifconfig {{ active_iface.stdout }} | grep -q '{{ macmini_pihole_ip }}'"
       register: alias_check
       failed_when: false
       changed_when: false
-      tags: [network]
+      tags: [mini-network]
 
     - name: Add secondary IP alias for Pihole
       become: yes
       command: "ifconfig {{ active_iface.stdout }} alias {{ macmini_pihole_ip }} 255.255.255.0"
       when: alias_check.rc != 0
-      tags: [network]
+      tags: [mini-network]
 
     - name: Create launchd plist for secondary IP (persists across reboot)
       become: yes
@@ -113,14 +122,14 @@
             <true/>
           </dict>
           </plist>
-      tags: [network]
+      tags: [mini-network]
 
     - name: Load secondary IP launchd plist
       become: yes
       command: launchctl load /Library/LaunchDaemons/com.amerenda.pihole-alias.plist
       changed_when: false
       failed_when: false
-      tags: [network]
+      tags: [mini-network]
 
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
@@ -129,13 +138,13 @@
       failed_when: false
       changed_when: false
       become: no
-      tags: [tailscale]
+      tags: [mini-tailscale]
 
     - name: Start Tailscale daemon
       become: yes
       command: brew services start tailscale
       when: tailscale_status.rc != 0
-      tags: [tailscale]
+      tags: [mini-tailscale]
 
     - name: Show Tailscale status
       debug:
@@ -144,7 +153,7 @@
 
           If not authenticated, SSH into the Mini and run:
             tailscale up --accept-routes
-      tags: [tailscale]
+      tags: [mini-tailscale]
 
     # ─── Docker (Colima) ───────────────────────────────────────────────────
     - name: Check if Colima is running
@@ -153,105 +162,25 @@
       failed_when: false
       changed_when: false
       become: no
-      tags: [docker]
+      tags: [mini-docker]
 
     - name: Start Colima with resources
       shell: /opt/homebrew/bin/colima start --cpu 4 --memory 8 --arch aarch64 --vm-type vz --mount-type virtiofs
       when: colima_status.rc != 0
       become: no
-      tags: [docker]
+      tags: [mini-docker]
 
     - name: Verify Docker is working
       shell: /opt/homebrew/bin/docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
       register: docker_version
       become: no
-      tags: [docker]
+      tags: [mini-docker]
 
     - name: Show Docker version
       debug:
         msg: "Docker version: {{ docker_version.stdout }}"
-      tags: [docker]
+      tags: [mini-docker]
 
-    # ─── Compose Repo ──────────────────────────────────────────────────────
-    - name: Check if compose repo exists
-      stat:
-        path: "{{ compose_dir }}/.git"
-      register: compose_repo_check
-      tags: [compose]
-
-    - name: Clone compose repo
-      git:
-        repo: "{{ compose_repo }}"
-        dest: "{{ compose_dir }}"
-        version: main
-        accept_hostkey: yes
-      when: not compose_repo_check.stat.exists
-      become: no
-      tags: [compose]
-
-    - name: Pull latest compose repo
-      git:
-        repo: "{{ compose_repo }}"
-        dest: "{{ compose_dir }}"
-        version: main
-        update: yes
-      when: compose_repo_check.stat.exists
-      become: no
-      tags: [compose]
-
-    - name: Check if .env exists
-      stat:
-        path: "{{ compose_dir }}/.env"
-      register: env_check
-      tags: [compose]
-
-    - name: Copy .env.example to .env if missing
-      copy:
-        src: "{{ compose_dir }}/.env.example"
-        dest: "{{ compose_dir }}/.env"
-        remote_src: yes
-      when: not env_check.stat.exists
-      become: no
-      tags: [compose]
-
-    - name: Check if TSIG key exists
-      stat:
-        path: "{{ compose_dir }}/bind9/keys/key.conf"
-      register: tsig_check
-      tags: [compose]
-
-    - name: Warn if secrets are not configured
-      debug:
-        msg: |
-          ACTION REQUIRED — configure secrets before starting services:
-
-          1. Edit {{ compose_dir }}/.env
-             Set PIHOLE_WEBPASSWORD from Bitwarden (pihole-admin)
-
-          2. Create {{ compose_dir }}/bind9/keys/key.conf
-             key "externaldns-key." {
-               algorithm hmac-sha256;
-               secret "<from Bitwarden: bind9-tsig-key>";
-             };
-      when: not tsig_check.stat.exists
-      tags: [compose]
-
-    # ─── Start Services ───────────────────────────────────────────────────
-    - name: Start Docker Compose services
-      shell: /opt/homebrew/bin/docker compose up -d
-      args:
-        chdir: "{{ compose_dir }}"
-      become: no
-      when: tsig_check.stat.exists and env_check.stat.exists
-      tags: [services]
-
-    - name: Skip service start (secrets not configured)
-      debug:
-        msg: "Skipping service start — configure .env and TSIG key first, then re-run with --tags services"
-      when: not tsig_check.stat.exists or not env_check.stat.exists
-      tags: [services]
-
-    # ─── Colima auto-start on boot ─────────────────────────────────────────
     - name: Create Colima auto-start launchd plist
       copy:
         dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
@@ -287,16 +216,94 @@
           </dict>
           </plist>
       become: no
-      tags: [docker]
+      tags: [mini-docker]
 
     - name: Load Colima auto-start plist
       shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.colima.plist"
       become: no
       changed_when: false
       failed_when: false
-      tags: [docker]
+      tags: [mini-docker]
 
-    # ─── Compose auto-start after Colima ───────────────────────────────────
+    # ─── Compose Repo ──────────────────────────────────────────────────────
+    - name: Check if compose repo exists
+      stat:
+        path: "{{ compose_dir }}/.git"
+      register: compose_repo_check
+      tags: [mini-compose]
+
+    - name: Clone compose repo
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+        accept_hostkey: yes
+      when: not compose_repo_check.stat.exists
+      become: no
+      tags: [mini-compose]
+
+    - name: Pull latest compose repo
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+        update: yes
+      when: compose_repo_check.stat.exists
+      become: no
+      tags: [mini-compose]
+
+    - name: Check if .env exists
+      stat:
+        path: "{{ compose_dir }}/.env"
+      register: env_check
+      tags: [mini-compose]
+
+    - name: Copy .env.example to .env if missing
+      copy:
+        src: "{{ compose_dir }}/.env.example"
+        dest: "{{ compose_dir }}/.env"
+        remote_src: yes
+      when: not env_check.stat.exists
+      become: no
+      tags: [mini-compose]
+
+    - name: Check if TSIG key exists
+      stat:
+        path: "{{ compose_dir }}/bind9/keys/key.conf"
+      register: tsig_check
+      tags: [mini-compose]
+
+    - name: Warn if secrets are not configured
+      debug:
+        msg: |
+          ACTION REQUIRED — configure secrets before starting services:
+
+          1. Edit {{ compose_dir }}/.env
+             Set PIHOLE_WEBPASSWORD from Bitwarden (pihole-admin)
+
+          2. Create {{ compose_dir }}/bind9/keys/key.conf
+             key "externaldns-key." {
+               algorithm hmac-sha256;
+               secret "<from Bitwarden: bind9-tsig-key>";
+             };
+      when: not tsig_check.stat.exists
+      tags: [mini-compose]
+
+    # ─── Start Services ───────────────────────────────────────────────────
+    - name: Start Docker Compose services
+      shell: /opt/homebrew/bin/docker compose up -d
+      args:
+        chdir: "{{ compose_dir }}"
+      become: no
+      when: tsig_check.stat.exists and env_check.stat.exists
+      tags: [mini-services]
+
+    - name: Skip service start (secrets not configured)
+      debug:
+        msg: "Skipping service start — configure .env and TSIG key first, then re-run with --tags mini-services"
+      when: not tsig_check.stat.exists or not env_check.stat.exists
+      tags: [mini-services]
+
     - name: Create Compose auto-start launchd plist
       copy:
         dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
@@ -323,14 +330,14 @@
           </dict>
           </plist>
       become: no
-      tags: [services]
+      tags: [mini-services]
 
     - name: Load Compose auto-start plist
       shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
       become: no
       changed_when: false
       failed_when: false
-      tags: [services]
+      tags: [mini-services]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary
@@ -353,7 +360,7 @@
           Next steps:
             1. Configure .env and TSIG key (see warnings above)
             2. SSH in and run: tailscale up --accept-routes
-            3. Re-run with --tags services to start everything
+            3. Re-run with --tags mini-services to start everything
 
           ════════════════════════════════════════
-      tags: [summary]
+      tags: [mini-summary]
