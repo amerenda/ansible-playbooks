@@ -1,0 +1,24 @@
+---
+# Group Variables for Mac Mini M4 (k3s controller)
+# Runs: Home Assistant, Pi-hole, voice LLM, Longhorn storage
+
+# Network
+macmini_ip: "10.100.20.18"
+gateway: "10.100.20.1"
+
+# Homebrew packages (macOS host tools)
+homebrew_packages:
+  - git
+  - jq
+  - htop
+  - tailscale
+  - kubectl
+
+# System
+timezone: "America/New_York"
+
+# k3s (same version as cluster)
+k3s_version: "v1.33.5+k3s1"
+
+# Longhorn
+longhorn_storage_enabled: true
