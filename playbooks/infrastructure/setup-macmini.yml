@@ -19,7 +19,7 @@
 #   mini-k3s        — Install k3s controller in OrbStack VM
 #   mini-summary    — Show setup summary
 
-- name: Setup Mac Mini M4 as k3s controller
+- name: Setup Mac Mini M4 as k3s agent
   hosts: macmini_hosts
   gather_facts: yes
   tags: [macmini]
@@ -164,30 +164,29 @@
       become: no
       tags: [mini-k3s]
 
-    - name: Install k3s controller in OrbStack VM
+    - name: Uninstall previous k3s if exists (clean slate)
+      shell: /opt/homebrew/bin/orb -m macmini sudo k3s-uninstall.sh 2>/dev/null || /opt/homebrew/bin/orb -m macmini sudo k3s-agent-uninstall.sh 2>/dev/null || true
+      when: k3s_check.rc == 0
+      become: no
+      tags: [mini-k3s]
+
+    - name: Install k3s agent in OrbStack VM
       shell: |
         /opt/homebrew/bin/orb -m macmini sudo bash -c '
           curl -sfL https://get.k3s.io | \
             INSTALL_K3S_VERSION="{{ k3s_version }}" \
             K3S_TOKEN="{{ k3s_token }}" \
             K3S_URL="https://{{ k3s_server_ip }}:6443" \
-            INSTALL_K3S_EXEC="server \
-              --disable=traefik \
-              --disable=local-storage \
-              --disable=metrics-server \
+            INSTALL_K3S_EXEC="agent \
               --node-name={{ macmini_hostname }} \
-              --node-ip={{ macmini_ip }} \
-              --flannel-backend=vxlan \
               --node-label=longhorn.io/storage=true \
               --node-label=longhorn-storage=true \
-              --node-label=macmini-controller=true \
+              --node-label=macmini-agent=true \
               --kubelet-arg=max-pods=110 \
               --kubelet-arg=kube-reserved=cpu=200m,memory=1Gi \
-              --kubelet-arg=system-reserved=cpu=200m,memory=1Gi \
-              --etcd-expose-metrics=true" \
+              --kubelet-arg=system-reserved=cpu=200m,memory=1Gi" \
             sh -
         '
-      when: k3s_check.rc != 0
       become: no
       tags: [mini-k3s]
 
@@ -215,13 +214,13 @@
           ════════════════════════════════════════
 
           Host: {{ macmini_ip }}
-          Role: k3s controller (etcd member)
+          Role: k3s agent (workload node)
           k3s version: {{ k3s_version }}
           OrbStack VM: macmini (Ubuntu arm64)
 
           Labels:
             - longhorn.io/storage=true
-            - macmini-controller=true
+            - macmini-agent=true
 
           Workloads planned:
             - Home Assistant
@@ -230,9 +229,8 @@
 
           Next steps:
             1. Verify node joined: kubectl get nodes
-            2. Apply post-k3s labels: ansible-playbook ... --tags k3s,post-setup
-            3. Enable Longhorn scheduling on this node
-            4. Pin workloads via nodeSelector: macmini-controller=true
+            2. Enable Longhorn scheduling on this node
+            3. Pin workloads via nodeSelector: macmini-agent=true
 
           ════════════════════════════════════════
       tags: [mini-summary]
