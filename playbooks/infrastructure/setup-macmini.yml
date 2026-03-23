@@ -115,7 +115,7 @@
       tags: [mini-orbstack]
 
     - name: Start OrbStack
-      shell: open -a OrbStack && sleep 5
+      shell: "{{ homebrew_bin }}/orbctl start"
       when: orbstack_running.rc != 0
       become: no
       tags: [mini-orbstack]
