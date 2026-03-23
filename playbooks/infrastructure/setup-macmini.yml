@@ -1,25 +1,26 @@
 ---
 # Mac Mini M4 Setup Playbook
-# Prepares the Mac Mini as a k3s controller node
-# k3s runs inside OrbStack's Linux VM with bridged networking
+# Prepares the Mac Mini as a Docker host using OrbStack
+# All services run as Docker containers via Docker Compose
 #
 # Prerequisites:
-#   - OrbStack installed: brew install --cask orbstack
-#   - OrbStack Linux machine created: orb create ubuntu macmini
-#   - SSH access configured to the OrbStack VM
+#   - SSH access to the Mini (ssh mini)
+#   - Passwordless sudo configured
+#   - Xcode CLI Tools + Rosetta installed (run mac-mini-init.sh first on a fresh box)
 #
 # Run:
-#   K3S_TOKEN=<token> ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
 #
 # Tags:
 #   macmini         — Everything
-#   mini-homebrew   — Install Homebrew packages on macOS host
-#   mini-system     — Hostname, timezone
+#   mini-homebrew   — Install Homebrew + packages + OrbStack
+#   mini-system     — Hostname, timezone, energy settings
+#   mini-orbstack   — Start and configure OrbStack
+#   mini-compose    — Deploy docker-compose stack + auto-start
 #   mini-tailscale  — Tailscale VPN setup
-#   mini-k3s        — Install k3s controller in OrbStack VM
 #   mini-summary    — Show setup summary
 
-- name: Setup Mac Mini M4 as k3s controller
+- name: Setup Mac Mini M4 as Docker host
   hosts: macmini_hosts
   gather_facts: yes
   tags: [macmini]
@@ -30,21 +31,14 @@
   vars:
     target_user: "{{ ansible_user }}"
     macmini_hostname: "mac-mini-m4"
-    k3s_token: "{{ lookup('env', 'K3S_TOKEN') }}"
-    k3s_server_ip: "10.100.20.10"
-
-  pre_tasks:
-    - name: Validate K3S_TOKEN is set
-      fail:
-        msg: "K3S_TOKEN env var must be set. Run: K3S_TOKEN=<token> ansible-playbook ..."
-      when: k3s_token == ""
-      tags: [mini-k3s]
+    homebrew_bin: /opt/homebrew/bin
+    services_dir: "/Users/{{ target_user }}/services"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
     - name: Check if Homebrew is installed
       stat:
-        path: /opt/homebrew/bin/brew
+        path: "{{ homebrew_bin }}/brew"
       register: homebrew_check
       tags: [mini-homebrew]
 
@@ -93,9 +87,155 @@
       changed_when: false
       tags: [mini-system]
 
+    - name: Disable sleep and display sleep
+      become: yes
+      command: pmset -a sleep 0 disablesleep 1 displaysleep 0
+      changed_when: false
+      tags: [mini-system]
+
+    - name: Disable automatic restart on power loss (optional)
+      become: yes
+      command: pmset -a autorestart 1
+      changed_when: false
+      tags: [mini-system]
+
+    - name: Disable screen saver
+      become: no
+      command: defaults -currentHost write com.apple.screensaver idleTime 0
+      changed_when: false
+      tags: [mini-system]
+
+    # ─── OrbStack ─────────────────────────────────────────────────────────
+    - name: Check if OrbStack is running
+      shell: "{{ homebrew_bin }}/docker info > /dev/null 2>&1"
+      register: orbstack_running
+      failed_when: false
+      changed_when: false
+      become: no
+      tags: [mini-orbstack]
+
+    - name: Start OrbStack
+      shell: open -a OrbStack && sleep 5
+      when: orbstack_running.rc != 0
+      become: no
+      tags: [mini-orbstack]
+
+    - name: Wait for Docker to be available
+      shell: "{{ homebrew_bin }}/docker info > /dev/null 2>&1"
+      register: docker_ready
+      become: no
+      retries: 12
+      delay: 5
+      until: docker_ready.rc == 0
+      tags: [mini-orbstack]
+
+    - name: Verify Docker is working
+      shell: "{{ homebrew_bin }}/docker run --rm hello-world 2>&1 | head -5"
+      register: docker_test
+      become: no
+      changed_when: false
+      tags: [mini-orbstack]
+
+    - name: Show Docker status
+      debug:
+        msg: "{{ docker_test.stdout_lines }}"
+      tags: [mini-orbstack]
+
+    # ─── Docker Compose Stack ─────────────────────────────────────────────
+    - name: Create services directory
+      file:
+        path: "{{ services_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        mode: '0755'
+      become: no
+      tags: [mini-compose]
+
+    - name: Deploy docker-compose.yaml
+      copy:
+        content: |
+          services:
+            homeassistant:
+              image: ghcr.io/home-assistant/home-assistant:{{ ha_version }}
+              container_name: homeassistant
+              restart: unless-stopped
+              network_mode: host
+              environment:
+                TZ: "{{ timezone }}"
+              volumes:
+                - ha-config:/config
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8123/api/"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 120s
+
+            node-exporter:
+              image: prom/node-exporter:latest
+              container_name: node-exporter
+              restart: unless-stopped
+              ports:
+                - "9100:9100"
+              command:
+                - '--path.rootfs=/host'
+                - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+              volumes:
+                - /:/host:ro,rslave
+              pid: host
+
+          volumes:
+            ha-config:
+        dest: "{{ services_dir }}/docker-compose.yaml"
+        owner: "{{ target_user }}"
+        mode: '0644'
+      become: no
+      tags: [mini-compose]
+
+    - name: Start Docker Compose stack
+      shell: "{{ homebrew_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d"
+      become: no
+      tags: [mini-compose]
+
+    - name: Create services auto-start LaunchAgent
+      copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key>
+            <string>com.amerenda.services</string>
+            <key>ProgramArguments</key>
+            <array>
+              <string>/bin/bash</string>
+              <string>-c</string>
+              <string>sleep 30 &amp;&amp; {{ homebrew_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>/tmp/services-start.log</string>
+            <key>StandardErrorPath</key>
+            <string>/tmp/services-start.err</string>
+          </dict>
+          </plist>
+        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.services.plist"
+        owner: "{{ target_user }}"
+        mode: '0644'
+      become: no
+      tags: [mini-compose]
+
+    - name: Load services LaunchAgent
+      shell: launchctl load ~/Library/LaunchAgents/com.amerenda.services.plist 2>/dev/null || true
+      become: no
+      changed_when: false
+      tags: [mini-compose]
+
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
-      shell: /opt/homebrew/bin/tailscale status 2>&1
+      shell: "{{ homebrew_bin }}/tailscale status 2>&1"
       register: tailscale_status
       failed_when: false
       changed_when: false
@@ -103,11 +243,11 @@
       tags: [mini-tailscale]
 
     - name: Start Tailscale daemon
-      become: no
-      shell: sudo /opt/homebrew/bin/brew services start tailscale
+      shell: "sudo {{ homebrew_bin }}/brew services start tailscale"
       environment:
         HOMEBREW_SERVICES_NO_DOMAIN_WARNING: "1"
       when: tailscale_status.rc != 0
+      become: no
       tags: [mini-tailscale]
 
     - name: Show Tailscale status
@@ -119,95 +259,6 @@
             tailscale up --accept-routes --ssh
       tags: [mini-tailscale]
 
-    # ─── OrbStack Linux VM ────────────────────────────────────────────────
-    - name: Start OrbStack
-      shell: /opt/homebrew/bin/orbctl start 2>/dev/null
-      become: no
-      failed_when: false
-      changed_when: false
-      tags: [mini-k3s]
-
-    - name: Check if OrbStack Linux machine exists
-      shell: /opt/homebrew/bin/orb list 2>/dev/null | grep -q macmini
-      register: orb_machine_check
-      failed_when: false
-      changed_when: false
-      become: no
-      tags: [mini-k3s]
-
-    - name: Create OrbStack Linux machine (Ubuntu)
-      shell: /opt/homebrew/bin/orb create --arch arm64 ubuntu macmini
-      when: orb_machine_check.rc != 0
-      become: no
-      tags: [mini-k3s]
-
-    # ─── k3s Controller in OrbStack VM ────────────────────────────────────
-    - name: Install k3s prerequisites in OrbStack VM
-      shell: |
-        /opt/homebrew/bin/orb -m macmini sudo bash -c '
-          apt-get update -qq
-          apt-get install -y -qq curl open-iscsi nfs-common cryptsetup-bin >/dev/null
-          systemctl enable --now iscsid
-          modprobe iscsi_tcp nfs dm_crypt 2>/dev/null || true
-          echo iscsi_tcp >> /etc/modules-load.d/longhorn.conf
-          echo nfs >> /etc/modules-load.d/longhorn.conf
-          echo dm_crypt >> /etc/modules-load.d/longhorn.conf
-        '
-      become: no
-      tags: [mini-k3s]
-
-    - name: Check if k3s is already installed in OrbStack VM
-      shell: /opt/homebrew/bin/orb -m macmini which k3s 2>/dev/null
-      register: k3s_check
-      failed_when: false
-      changed_when: false
-      become: no
-      tags: [mini-k3s]
-
-    - name: Uninstall previous k3s if present (clean slate)
-      shell: |
-        /opt/homebrew/bin/orb -m macmini sudo bash -c '
-          k3s-uninstall.sh 2>/dev/null || k3s-agent-uninstall.sh 2>/dev/null || true
-        '
-      when: k3s_check.rc == 0
-      become: no
-      tags: [mini-k3s]
-
-    - name: Install k3s agent in OrbStack VM
-      shell: |
-        /opt/homebrew/bin/orb -m macmini sudo bash -c '
-          curl -sfL https://get.k3s.io | \
-            INSTALL_K3S_VERSION="{{ k3s_version }}" \
-            K3S_TOKEN="{{ k3s_token }}" \
-            K3S_URL="https://{{ k3s_server_ip }}:6443" \
-            INSTALL_K3S_EXEC="agent \
-              --node-name={{ macmini_hostname }} \
-              --node-label=longhorn.io/storage=true \
-              --node-label=longhorn-storage=true \
-              --node-label=macmini-agent=true \
-              --kubelet-arg=max-pods=110 \
-              --kubelet-arg=kube-reserved=cpu=200m,memory=1Gi \
-              --kubelet-arg=system-reserved=cpu=200m,memory=1Gi" \
-            sh -
-        '
-      become: no
-      tags: [mini-k3s]
-
-    - name: Wait for k3s agent to join cluster
-      shell: |
-        /opt/homebrew/bin/orb -m macmini sudo systemctl is-active k3s-agent 2>/dev/null
-      register: k3s_ready
-      become: no
-      retries: 12
-      delay: 5
-      until: k3s_ready.rc == 0
-      tags: [mini-k3s]
-
-    - name: Show k3s agent status
-      debug:
-        msg: "k3s agent service is active. Check node with: kubectl get nodes"
-      tags: [mini-k3s]
-
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary
       debug:
@@ -217,22 +268,18 @@
           ════════════════════════════════════════
 
           Host: {{ macmini_ip }}
-          Role: k3s agent (workload node)
-          k3s version: {{ k3s_version }}
-          OrbStack VM: macmini (Ubuntu arm64)
+          Hostname: {{ macmini_hostname }}
+          Runtime: OrbStack (Docker)
+          Services dir: {{ services_dir }}
 
-          Labels:
-            - longhorn.io/storage=true
-            - macmini-agent=true
+          Containers:
+            - Home Assistant ({{ ha_version }})
+            - node-exporter
 
-          Workloads planned:
-            - Home Assistant
-            - Pi-hole
-            - Voice LLM
-
-          Next steps:
-            1. Verify node joined: kubectl get nodes
-            2. Pin workloads via nodeSelector: macmini-agent=true
+          Manual steps remaining:
+            1. Enable auto-login: System Settings > Users & Groups > Automatic Login
+            2. If Tailscale not authenticated: ssh mini && tailscale up --accept-routes --ssh
+            3. Verify HA: http://{{ macmini_ip }}:8123
 
           ════════════════════════════════════════
       tags: [mini-summary]

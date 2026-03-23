@@ -1,6 +1,7 @@
 ---
-# Group Variables for Mac Mini M4 (k3s controller)
-# Runs: Home Assistant, Pi-hole, voice LLM, Longhorn storage
+# Group Variables for Mac Mini M4 (Docker host via OrbStack)
+# Runs: Home Assistant, node-exporter
+# Future: Voice LLM, GitHub runner, Technitium DNS (Phase 2)
 
 # Network
 macmini_ip: "10.100.20.18"
@@ -12,13 +13,10 @@ homebrew_packages:
   - jq
   - htop
   - tailscale
-  - kubectl
+  - kubernetes-cli
 
 # System
 timezone: "America/New_York"
 
-# k3s (same version as cluster)
-k3s_version: "v1.33.5+k3s1"
-
-# Longhorn
-longhorn_storage_enabled: true
+# Container images
+ha_version: "2026.1.2"
