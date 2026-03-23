@@ -1,7 +1,7 @@
 ---
 # Group Variables for Mac Mini M4 (Docker host via OrbStack)
-# Runs: Home Assistant, node-exporter
-# Future: Voice LLM, GitHub runner, Technitium DNS (Phase 2)
+# Services managed by Komodo (GitOps for Docker Compose)
+# Compose repo: amerenda/mac-mini-compose
 
 # Network
 macmini_ip: "10.100.20.18"
@@ -14,9 +14,35 @@ homebrew_packages:
   - htop
   - tailscale
   - kubernetes-cli
+  - bitwarden-sdk-secrets
 
 # System
 timezone: "America/New_York"
 
 # Container images
 ha_version: "2026.1.2"
+
+# ─── Bitwarden Secrets Manager ────────────────────────────────────────────
+# Each entry maps a secret file name to a Bitwarden secret ID.
+# Create these secrets in Bitwarden Secrets Manager before running the playbook.
+#
+# Required secrets:
+#   db_password     — Postgres/FerretDB database password
+#   passkey         — Komodo Core ↔ Periphery authentication passkey
+#   webhook_secret  — GitHub webhook HMAC validation secret
+#   jwt_secret      — JWT signing secret for Komodo web sessions
+#   admin_password  — Initial Komodo admin user password
+#
+# To find secret IDs: bws secret list --access-token <TOKEN>
+# Replace the placeholder UUIDs below with your actual Bitwarden secret IDs.
+komodo_bws_secrets:
+  - name: db_password
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: passkey
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: webhook_secret
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: jwt_secret
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: admin_password
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"

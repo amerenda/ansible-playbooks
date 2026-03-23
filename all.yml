@@ -29,4 +29,4 @@
 # Via all.yml:  ansible-playbook -i inventory/inventory.ini all.yml --tags macmini
 - name: Setup Mac Mini M4 (Docker host via OrbStack)
   import_playbook: playbooks/infrastructure/setup-macmini.yml
-  tags: [macmini, mini-homebrew, mini-system, mini-orbstack, mini-compose, mini-tailscale, mini-summary]
+  tags: [macmini, mini-homebrew, mini-system, mini-orbstack, mini-secrets, mini-komodo, mini-tailscale, mini-summary]

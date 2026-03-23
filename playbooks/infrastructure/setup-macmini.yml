@@ -1,22 +1,25 @@
 ---
 # Mac Mini M4 Setup Playbook
 # Prepares the Mac Mini as a Docker host using OrbStack
-# All services run as Docker containers via Docker Compose
+# Services are managed by Komodo (GitOps for Docker Compose)
 #
 # Prerequisites:
 #   - SSH access to the Mini (ssh mini)
 #   - Passwordless sudo configured
 #   - Xcode CLI Tools + Rosetta installed (run mac-mini-init.sh first on a fresh box)
+#   - Bitwarden Secrets Manager secrets created (see group_vars/macmini_hosts.yml)
 #
 # Run:
-#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
+#     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
 #
 # Tags:
 #   macmini         — Everything
 #   mini-homebrew   — Install Homebrew + packages + OrbStack
 #   mini-system     — Hostname, timezone, energy settings
 #   mini-orbstack   — Start and configure OrbStack
-#   mini-compose    — Deploy docker-compose stack + auto-start
+#   mini-secrets    — Fetch secrets from Bitwarden, write to disk
+#   mini-komodo     — Clone compose repo, deploy Komodo
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-summary    — Show setup summary
 
@@ -33,7 +36,9 @@
     macmini_hostname: "mac-mini-m4"
     homebrew_bin: /opt/homebrew/bin
     orbstack_bin: "/Users/{{ target_user }}/.orbstack/bin"
-    services_dir: "/Users/{{ target_user }}/services"
+    compose_repo: "https://github.com/amerenda/mac-mini-compose.git"
+    compose_dir: "/Users/{{ target_user }}/mac-mini-compose"
+    komodo_dir: "/Users/{{ target_user }}/mac-mini-compose/komodo"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -94,7 +99,7 @@
       changed_when: false
       tags: [mini-system]
 
-    - name: Disable automatic restart on power loss (optional)
+    - name: Enable automatic restart on power loss
       become: yes
       command: pmset -a autorestart 1
       changed_when: false
@@ -130,109 +135,124 @@
       until: docker_ready.rc == 0
       tags: [mini-orbstack]
 
-    - name: Verify Docker is working
-      shell: "{{ orbstack_bin }}/docker run --rm hello-world 2>&1 | head -5"
-      register: docker_test
+    # ─── Komodo: Clone Repo ────────────────────────────────────────────
+    - name: Clone mac-mini-compose repo
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+        force: no
+      become: no
+      tags: [mini-komodo, mini-secrets]
+
+    - name: Pull latest mac-mini-compose
+      shell: "git -C {{ compose_dir }} pull --ff-only"
       become: no
       changed_when: false
-      tags: [mini-orbstack]
+      tags: [mini-komodo, mini-secrets]
 
-    - name: Show Docker status
-      debug:
-        msg: "{{ docker_test.stdout_lines }}"
-      tags: [mini-orbstack]
+    # ─── Bitwarden Secrets ───────────────────────────────────────────────
+    - name: Validate bws_access_token is provided
+      fail:
+        msg: |
+          bws_access_token must be provided. Run with:
+            ansible-playbook ... --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
+      when: bws_access_token is not defined or bws_access_token == ""
+      tags: [mini-secrets, mini-komodo]
 
-    # ─── Docker Compose Stack ─────────────────────────────────────────────
-    - name: Create services directory
+    - name: Check if bws CLI is installed
+      stat:
+        path: "{{ homebrew_bin }}/bws"
+      register: bws_check
+      tags: [mini-secrets]
+
+    - name: Install bws CLI via Homebrew
+      community.general.homebrew:
+        name: bitwarden-sdk-secrets
+        state: present
+      become: no
+      when: not bws_check.stat.exists
+      tags: [mini-secrets]
+
+    - name: Create Komodo secrets directory
       file:
-        path: "{{ services_dir }}"
+        path: "{{ komodo_dir }}/secrets"
+        state: directory
+        owner: "{{ target_user }}"
+        mode: '0700'
+      become: no
+      tags: [mini-secrets]
+
+    - name: Fetch secrets from Bitwarden
+      shell: "{{ homebrew_bin }}/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
+      register: bws_secrets
+      loop: "{{ komodo_bws_secrets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      become: no
+      changed_when: false
+      no_log: true
+      tags: [mini-secrets]
+
+    - name: Write secret files for Komodo _FILE pattern
+      copy:
+        content: "{{ item.stdout }}"
+        dest: "{{ komodo_dir }}/secrets/{{ item.item.name }}"
+        owner: "{{ target_user }}"
+        mode: '0600'
+      loop: "{{ bws_secrets.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      become: no
+      no_log: true
+      tags: [mini-secrets]
+
+    - name: Inject plaintext secrets into Komodo compose.env
+      lineinfile:
+        path: "{{ komodo_dir }}/compose.env"
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ (bws_secrets.results | selectattr('item.name', 'equalto', item.secret_name) | first).stdout }}"
+      loop:
+        - { key: "KOMODO_DB_PASSWORD", secret_name: "db_password" }
+        - { key: "KOMODO_INIT_ADMIN_PASSWORD", secret_name: "admin_password" }
+        - { key: "PERIPHERY_PASSKEYS", secret_name: "passkey" }
+      loop_control:
+        label: "{{ item.key }}"
+      become: no
+      no_log: true
+      tags: [mini-secrets]
+
+    # ─── Komodo: Deploy ──────────────────────────────────────────────────
+    - name: Create Komodo data directories
+      file:
+        path: "{{ item }}"
         state: directory
         owner: "{{ target_user }}"
         mode: '0755'
+      loop:
+        - /etc/komodo
+        - /etc/komodo/backups
+      become: yes
+      tags: [mini-komodo]
+
+    - name: Start Komodo stack
+      shell: >
+        {{ orbstack_bin }}/docker compose
+        -p komodo
+        -f {{ komodo_dir }}/compose.yaml
+        --env-file {{ komodo_dir }}/compose.env
+        up -d
       become: no
-      tags: [mini-compose]
+      tags: [mini-komodo]
 
-    - name: Deploy docker-compose.yaml
-      copy:
-        content: |
-          services:
-            homeassistant:
-              image: ghcr.io/home-assistant/home-assistant:{{ ha_version }}
-              container_name: homeassistant
-              restart: unless-stopped
-              network_mode: host
-              environment:
-                TZ: "{{ timezone }}"
-              volumes:
-                - ha-config:/config
-              healthcheck:
-                test: ["CMD", "curl", "-f", "http://localhost:8123/api/"]
-                interval: 30s
-                timeout: 10s
-                retries: 5
-                start_period: 120s
-
-            node-exporter:
-              image: prom/node-exporter:latest
-              container_name: node-exporter
-              restart: unless-stopped
-              ports:
-                - "9100:9100"
-              command:
-                - '--path.rootfs=/host'
-                - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-              volumes:
-                - /:/host:ro,rslave
-              pid: host
-
-          volumes:
-            ha-config:
-        dest: "{{ services_dir }}/docker-compose.yaml"
-        owner: "{{ target_user }}"
-        mode: '0644'
+    - name: Wait for Komodo Core to be ready
+      shell: "curl -sf http://localhost:9120 > /dev/null 2>&1"
+      register: komodo_ready
       become: no
-      tags: [mini-compose]
-
-    - name: Start Docker Compose stack
-      shell: "{{ orbstack_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d"
-      become: no
-      tags: [mini-compose]
-
-    - name: Create services auto-start LaunchAgent
-      copy:
-        content: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>Label</key>
-            <string>com.amerenda.services</string>
-            <key>ProgramArguments</key>
-            <array>
-              <string>/bin/bash</string>
-              <string>-c</string>
-              <string>sleep 30 &amp;&amp; {{ orbstack_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>StandardOutPath</key>
-            <string>/tmp/services-start.log</string>
-            <key>StandardErrorPath</key>
-            <string>/tmp/services-start.err</string>
-          </dict>
-          </plist>
-        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.services.plist"
-        owner: "{{ target_user }}"
-        mode: '0644'
-      become: no
-      tags: [mini-compose]
-
-    - name: Load services LaunchAgent
-      shell: launchctl load ~/Library/LaunchAgents/com.amerenda.services.plist 2>/dev/null || true
-      become: no
-      changed_when: false
-      tags: [mini-compose]
+      retries: 12
+      delay: 5
+      until: komodo_ready.rc == 0
+      tags: [mini-komodo]
 
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
@@ -271,16 +291,20 @@
           Host: {{ macmini_ip }}
           Hostname: {{ macmini_hostname }}
           Runtime: OrbStack (Docker)
-          Services dir: {{ services_dir }}
+          Compose repo: {{ compose_dir }}
 
-          Containers:
-            - Home Assistant ({{ ha_version }})
-            - node-exporter
+          Komodo UI: http://{{ macmini_ip }}:9120
+            Admin user: admin (change password on first login!)
 
-          Manual steps remaining:
-            1. Enable auto-login: System Settings > Users & Groups > Automatic Login
-            2. If Tailscale not authenticated: ssh mini && tailscale up --accept-routes --ssh
-            3. Verify HA: http://{{ macmini_ip }}:8123
+          Containers (managed by Komodo):
+            - Komodo Core + Periphery + FerretDB + Postgres
+
+          Next steps:
+            1. Log into Komodo: http://{{ macmini_ip }}:9120
+            2. Add stacks from the mac-mini-compose repo (HA, monitoring, etc.)
+            3. Configure GitHub webhook for auto-deploy
+            4. Enable auto-login: System Settings > Users & Groups > Automatic Login
+            5. If Tailscale not authenticated: ssh mini && tailscale up --accept-routes --ssh
 
           ════════════════════════════════════════
       tags: [mini-summary]
