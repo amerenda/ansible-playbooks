@@ -27,22 +27,22 @@ ha_version: "2026.1.2"
 # Create these secrets in Bitwarden Secrets Manager before running the playbook.
 #
 # Required secrets:
-#   db_password     — Postgres/FerretDB database password
-#   passkey         — Komodo Core ↔ Periphery authentication passkey
-#   webhook_secret  — GitHub webhook HMAC validation secret
-#   jwt_secret      — JWT signing secret for Komodo web sessions
-#   admin_password  — Initial Komodo admin user password
+#   komodo-db-password        — Postgres/FerretDB database password
+#   komodo-core-passkey       — Komodo Core ↔ Periphery authentication
+#   komodo-core-webhook-secret — GitHub webhook HMAC validation
+#   komodo-core-jwt-secret    — JWT signing for Komodo web sessions
+#   komodo-core-admin-password — Initial Komodo admin user password
 #
 # To find secret IDs: bws secret list --access-token <TOKEN>
 # Replace the placeholder UUIDs below with your actual Bitwarden secret IDs.
 komodo_bws_secrets:
-  - name: db_password
+  - name: komodo-db-password
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
-  - name: passkey
+  - name: komodo-core-passkey
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
-  - name: webhook_secret
+  - name: komodo-core-webhook-secret
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
-  - name: jwt_secret
+  - name: komodo-core-jwt-secret
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
-  - name: admin_password
+  - name: komodo-core-admin-password
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"

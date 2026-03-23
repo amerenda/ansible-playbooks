@@ -213,9 +213,9 @@
         regexp: "^{{ item.key }}="
         line: "{{ item.key }}={{ (bws_secrets.results | selectattr('item.name', 'equalto', item.secret_name) | first).stdout }}"
       loop:
-        - { key: "KOMODO_DB_PASSWORD", secret_name: "db_password" }
-        - { key: "KOMODO_INIT_ADMIN_PASSWORD", secret_name: "admin_password" }
-        - { key: "PERIPHERY_PASSKEYS", secret_name: "passkey" }
+        - { key: "KOMODO_DB_PASSWORD", secret_name: "komodo-db-password" }
+        - { key: "KOMODO_INIT_ADMIN_PASSWORD", secret_name: "komodo-core-admin-password" }
+        - { key: "PERIPHERY_PASSKEYS", secret_name: "komodo-core-passkey" }
       loop_control:
         label: "{{ item.key }}"
       become: no
