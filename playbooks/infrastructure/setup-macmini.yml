@@ -32,6 +32,7 @@
     target_user: "{{ ansible_user }}"
     macmini_hostname: "mac-mini-m4"
     homebrew_bin: /opt/homebrew/bin
+    orbstack_bin: "/Users/{{ target_user }}/.orbstack/bin"
     services_dir: "/Users/{{ target_user }}/services"
 
   tasks:
@@ -107,7 +108,7 @@
 
     # ─── OrbStack ─────────────────────────────────────────────────────────
     - name: Check if OrbStack is running
-      shell: "{{ homebrew_bin }}/docker info > /dev/null 2>&1"
+      shell: "{{ orbstack_bin }}/docker info > /dev/null 2>&1"
       register: orbstack_running
       failed_when: false
       changed_when: false
@@ -121,7 +122,7 @@
       tags: [mini-orbstack]
 
     - name: Wait for Docker to be available
-      shell: "{{ homebrew_bin }}/docker info > /dev/null 2>&1"
+      shell: "{{ orbstack_bin }}/docker info > /dev/null 2>&1"
       register: docker_ready
       become: no
       retries: 12
@@ -130,7 +131,7 @@
       tags: [mini-orbstack]
 
     - name: Verify Docker is working
-      shell: "{{ homebrew_bin }}/docker run --rm hello-world 2>&1 | head -5"
+      shell: "{{ orbstack_bin }}/docker run --rm hello-world 2>&1 | head -5"
       register: docker_test
       become: no
       changed_when: false
@@ -193,7 +194,7 @@
       tags: [mini-compose]
 
     - name: Start Docker Compose stack
-      shell: "{{ homebrew_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d"
+      shell: "{{ orbstack_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d"
       become: no
       tags: [mini-compose]
 
@@ -211,7 +212,7 @@
             <array>
               <string>/bin/bash</string>
               <string>-c</string>
-              <string>sleep 30 &amp;&amp; {{ homebrew_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d</string>
+              <string>sleep 30 &amp;&amp; {{ orbstack_bin }}/docker compose -f {{ services_dir }}/docker-compose.yaml up -d</string>
             </array>
             <key>RunAtLoad</key>
             <true/>
