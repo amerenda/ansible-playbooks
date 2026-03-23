@@ -1,42 +1,44 @@
 ---
 # Mac Mini M4 Setup Playbook
-# Prepares the Mac Mini for running core home lab services via Docker Compose
-# Assumes: macOS with SSH enabled, user 'alex' exists
+# Prepares the Mac Mini as a k3s controller node
+# k3s runs inside OrbStack's Linux VM with bridged networking
 #
-# Run all:
-#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
+# Prerequisites:
+#   - OrbStack installed: brew install --cask orbstack
+#   - OrbStack Linux machine created: orb create ubuntu macmini
+#   - SSH access configured to the OrbStack VM
 #
-# Run specific phase:
-#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml --tags mini-docker
-#
-# Via all.yml:
-#   ansible-playbook -i inventory/inventory.ini all.yml --tags macmini
-#   ansible-playbook -i inventory/inventory.ini all.yml --tags mini-network
+# Run:
+#   K3S_TOKEN=<token> ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
 #
 # Tags:
-#   macmini         — Everything (play-level)
-#   mini-homebrew   — Install Homebrew and packages
+#   macmini         — Everything
+#   mini-homebrew   — Install Homebrew packages on macOS host
 #   mini-system     — Hostname, timezone
-#   mini-network    — Secondary IP alias for Pihole
 #   mini-tailscale  — Tailscale VPN setup
-#   mini-docker     — Colima + Docker setup + auto-start
-#   mini-compose    — Clone and configure compose repo
-#   mini-services   — Start Docker Compose services + auto-start
+#   mini-k3s        — Install k3s controller in OrbStack VM
 #   mini-summary    — Show setup summary
 
-- name: Setup Mac Mini M4 for core services
-  hosts: macmini
+- name: Setup Mac Mini M4 as k3s controller
+  hosts: macmini_hosts
   gather_facts: yes
   tags: [macmini]
-  collections:
-    - community.general
 
   vars_files:
-    - ../../group_vars/macmini.yml
+    - ../../group_vars/macmini_hosts.yml
 
   vars:
     target_user: "{{ ansible_user }}"
-    macmini_hostname: "macmini"
+    macmini_hostname: "mac-mini-m4"
+    k3s_token: "{{ lookup('env', 'K3S_TOKEN') }}"
+    k3s_server_ip: "10.100.20.10"
+
+  pre_tasks:
+    - name: Validate K3S_TOKEN is set
+      fail:
+        msg: "K3S_TOKEN env var must be set. Run: K3S_TOKEN=<token> ansible-playbook ..."
+      when: k3s_token == ""
+      tags: [mini-k3s]
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -68,9 +70,9 @@
       become: no
       tags: [mini-homebrew]
 
-    - name: Install Homebrew casks (OrbStack)
+    - name: Install OrbStack
       community.general.homebrew_cask:
-        name: "{{ homebrew_casks }}"
+        name: orbstack
         state: present
       become: no
       tags: [mini-homebrew]
@@ -90,59 +92,6 @@
         scutil --set LocalHostName "{{ macmini_hostname }}"
       changed_when: false
       tags: [mini-system]
-
-    # ─── Network — Secondary IP for Pihole ─────────────────────────────────
-    - name: Get active network interface
-      shell: route -n get default 2>/dev/null | awk '/interface:/{print $2}'
-      register: active_iface
-      changed_when: false
-      tags: [mini-network]
-
-    - name: Check if secondary IP alias exists
-      shell: "ifconfig {{ active_iface.stdout }} | grep -q '{{ macmini_pihole_ip }}'"
-      register: alias_check
-      failed_when: false
-      changed_when: false
-      tags: [mini-network]
-
-    - name: Add secondary IP alias for Pihole
-      become: yes
-      command: "ifconfig {{ active_iface.stdout }} alias {{ macmini_pihole_ip }} 255.255.255.0"
-      when: alias_check.rc != 0
-      tags: [mini-network]
-
-    - name: Create launchd plist for secondary IP (persists across reboot)
-      become: yes
-      copy:
-        dest: /Library/LaunchDaemons/com.amerenda.pihole-alias.plist
-        mode: '0644'
-        content: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>Label</key>
-            <string>com.amerenda.pihole-alias</string>
-            <key>ProgramArguments</key>
-            <array>
-              <string>/sbin/ifconfig</string>
-              <string>{{ active_iface.stdout }}</string>
-              <string>alias</string>
-              <string>{{ macmini_pihole_ip }}</string>
-              <string>255.255.255.0</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-          </dict>
-          </plist>
-      tags: [mini-network]
-
-    - name: Load secondary IP launchd plist
-      become: yes
-      command: launchctl load /Library/LaunchDaemons/com.amerenda.pihole-alias.plist
-      changed_when: false
-      failed_when: false
-      tags: [mini-network]
 
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
@@ -164,176 +113,126 @@
     - name: Show Tailscale status
       debug:
         msg: |
-          Tailscale status: {{ tailscale_status.stdout_lines | default(['not running — run: tailscale up']) }}
+          Tailscale status: {{ tailscale_status.stdout_lines | default(['not running']) }}
 
           If not authenticated, SSH into the Mini and run:
-            tailscale up --accept-routes
+            tailscale up --accept-routes --ssh
       tags: [mini-tailscale]
 
-    # ─── Docker (OrbStack) ──────────────────────────────────────────────────
-    - name: Check if OrbStack Docker is running
-      shell: /opt/homebrew/bin/docker info 2>&1
-      register: docker_status
-      failed_when: false
-      changed_when: false
-      become: no
-      tags: [mini-docker]
-
+    # ─── OrbStack Linux VM ────────────────────────────────────────────────
     - name: Start OrbStack
-      shell: open -a OrbStack --background 2>/dev/null || /Applications/OrbStack.app/Contents/MacOS/OrbStack start 2>/dev/null
-      when: docker_status.rc != 0
+      shell: /opt/homebrew/bin/orbctl start 2>/dev/null
       become: no
       failed_when: false
-      tags: [mini-docker]
-
-    - name: Wait for Docker to be ready
-      shell: /opt/homebrew/bin/docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
-      register: docker_version
-      become: no
-      retries: 10
-      delay: 3
-      until: docker_version.rc == 0
-      tags: [mini-docker]
-
-    - name: Show Docker version
-      debug:
-        msg: "Docker version: {{ docker_version.stdout }}"
-      tags: [mini-docker]
-
-    # ─── Compose Repo ──────────────────────────────────────────────────────
-    - name: Check if compose repo exists
-      stat:
-        path: "{{ compose_dir }}/.git"
-      register: compose_repo_check
-      tags: [mini-compose]
-
-    - name: Clone compose repo
-      git:
-        repo: "{{ compose_repo }}"
-        dest: "{{ compose_dir }}"
-        version: main
-        accept_hostkey: yes
-      when: not compose_repo_check.stat.exists
-      become: no
-      tags: [mini-compose]
-
-    - name: Pull latest compose repo
-      git:
-        repo: "{{ compose_repo }}"
-        dest: "{{ compose_dir }}"
-        version: main
-        update: yes
-      when: compose_repo_check.stat.exists
-      become: no
-      tags: [mini-compose]
-
-    - name: Check if .env exists
-      stat:
-        path: "{{ compose_dir }}/.env"
-      register: env_check
-      tags: [mini-compose]
-
-    - name: Copy .env.example to .env if missing
-      copy:
-        src: "{{ compose_dir }}/.env.example"
-        dest: "{{ compose_dir }}/.env"
-        remote_src: yes
-      when: not env_check.stat.exists
-      become: no
-      tags: [mini-compose]
-
-    - name: Check if TSIG key exists
-      stat:
-        path: "{{ compose_dir }}/bind9/keys/key.conf"
-      register: tsig_check
-      tags: [mini-compose]
-
-    - name: Warn if secrets are not configured
-      debug:
-        msg: |
-          ACTION REQUIRED — configure secrets before starting services:
-
-          1. Edit {{ compose_dir }}/.env
-             Set PIHOLE_WEBPASSWORD from Bitwarden (pihole-admin)
-
-          2. Create {{ compose_dir }}/bind9/keys/key.conf
-             key "externaldns-key." {
-               algorithm hmac-sha256;
-               secret "<from Bitwarden: bind9-tsig-key>";
-             };
-      when: not tsig_check.stat.exists
-      tags: [mini-compose]
-
-    # ─── Start Services ───────────────────────────────────────────────────
-    - name: Start Docker Compose services
-      shell: /opt/homebrew/bin/docker compose up -d
-      args:
-        chdir: "{{ compose_dir }}"
-      become: no
-      when: tsig_check.stat.exists and env_check.stat.exists
-      tags: [mini-services]
-
-    - name: Skip service start (secrets not configured)
-      debug:
-        msg: "Skipping service start — configure .env and TSIG key first, then re-run with --tags mini-services"
-      when: not tsig_check.stat.exists or not env_check.stat.exists
-      tags: [mini-services]
-
-    - name: Create Compose auto-start launchd plist
-      copy:
-        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
-        mode: '0644'
-        content: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>Label</key>
-            <string>com.amerenda.compose</string>
-            <key>ProgramArguments</key>
-            <array>
-              <string>/bin/bash</string>
-              <string>-c</string>
-              <string>sleep 30 &amp;&amp; cd {{ compose_dir }} &amp;&amp; /opt/homebrew/bin/docker compose up -d</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>StandardOutPath</key>
-            <string>/tmp/compose-start.log</string>
-            <key>StandardErrorPath</key>
-            <string>/tmp/compose-start.err</string>
-          </dict>
-          </plist>
-      become: no
-      tags: [mini-services]
-
-    - name: Load Compose auto-start plist
-      shell: launchctl load "/Users/{{ target_user }}/Library/LaunchAgents/com.amerenda.compose.plist"
-      become: no
       changed_when: false
+      tags: [mini-k3s]
+
+    - name: Check if OrbStack Linux machine exists
+      shell: /opt/homebrew/bin/orb list 2>/dev/null | grep -q macmini
+      register: orb_machine_check
       failed_when: false
-      tags: [mini-services]
+      changed_when: false
+      become: no
+      tags: [mini-k3s]
+
+    - name: Create OrbStack Linux machine (Ubuntu)
+      shell: /opt/homebrew/bin/orb create --arch arm64 ubuntu macmini
+      when: orb_machine_check.rc != 0
+      become: no
+      tags: [mini-k3s]
+
+    # ─── k3s Controller in OrbStack VM ────────────────────────────────────
+    - name: Install k3s prerequisites in OrbStack VM
+      shell: |
+        /opt/homebrew/bin/orb -m macmini sudo bash -c '
+          apt-get update -qq
+          apt-get install -y -qq curl open-iscsi nfs-common cryptsetup-bin >/dev/null
+          systemctl enable --now iscsid
+          modprobe iscsi_tcp nfs dm_crypt 2>/dev/null || true
+          echo iscsi_tcp >> /etc/modules-load.d/longhorn.conf
+          echo nfs >> /etc/modules-load.d/longhorn.conf
+          echo dm_crypt >> /etc/modules-load.d/longhorn.conf
+        '
+      become: no
+      tags: [mini-k3s]
+
+    - name: Check if k3s is already installed in OrbStack VM
+      shell: /opt/homebrew/bin/orb -m macmini which k3s 2>/dev/null
+      register: k3s_check
+      failed_when: false
+      changed_when: false
+      become: no
+      tags: [mini-k3s]
+
+    - name: Install k3s controller in OrbStack VM
+      shell: |
+        /opt/homebrew/bin/orb -m macmini sudo bash -c '
+          curl -sfL https://get.k3s.io | \
+            INSTALL_K3S_VERSION="{{ k3s_version }}" \
+            K3S_TOKEN="{{ k3s_token }}" \
+            K3S_URL="https://{{ k3s_server_ip }}:6443" \
+            INSTALL_K3S_EXEC="server \
+              --disable=traefik \
+              --disable=local-storage \
+              --disable=metrics-server \
+              --node-name={{ macmini_hostname }} \
+              --node-ip={{ macmini_ip }} \
+              --flannel-backend=vxlan \
+              --node-label=longhorn.io/storage=true \
+              --node-label=longhorn-storage=true \
+              --node-label=macmini-controller=true \
+              --kubelet-arg=max-pods=110 \
+              --kubelet-arg=kube-reserved=cpu=200m,memory=1Gi \
+              --kubelet-arg=system-reserved=cpu=200m,memory=1Gi \
+              --etcd-expose-metrics=true" \
+            sh -
+        '
+      when: k3s_check.rc != 0
+      become: no
+      tags: [mini-k3s]
+
+    - name: Wait for k3s to be ready
+      shell: |
+        /opt/homebrew/bin/orb -m macmini sudo k3s kubectl get node {{ macmini_hostname }} --no-headers 2>/dev/null
+      register: k3s_ready
+      become: no
+      retries: 30
+      delay: 5
+      until: k3s_ready.rc == 0 and 'Ready' in k3s_ready.stdout
+      tags: [mini-k3s]
+
+    - name: Show k3s node status
+      debug:
+        msg: "k3s node: {{ k3s_ready.stdout }}"
+      tags: [mini-k3s]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary
       debug:
         msg: |
           ════════════════════════════════════════
-          Mac Mini Setup Summary
+          Mac Mini M4 Setup Summary
           ════════════════════════════════════════
 
           Host: {{ macmini_ip }}
-          Docker: {{ docker_version.stdout | default('not started') }} (OrbStack)
-          Compose repo: {{ compose_dir }}
+          Role: k3s controller (etcd member)
+          k3s version: {{ k3s_version }}
+          OrbStack VM: macmini (Ubuntu arm64)
 
-          Auto-start on boot:
-            - OrbStack (auto-starts on login)
-            - Docker Compose (launchd, 30s delay)
+          Labels:
+            - longhorn.io/storage=true
+            - macmini-controller=true
+
+          Workloads planned:
+            - Home Assistant
+            - Pi-hole
+            - Voice LLM
 
           Next steps:
-            1. Configure .env and TSIG key (see warnings above)
-            2. SSH in and run: tailscale up --accept-routes --ssh
-            3. Re-run with --tags mini-services to start everything
+            1. Verify node joined: kubectl get nodes
+            2. Apply post-k3s labels: ansible-playbook ... --tags k3s,post-setup
+            3. Enable Longhorn scheduling on this node
+            4. Pin workloads via nodeSelector: macmini-controller=true
 
           ════════════════════════════════════════
       tags: [mini-summary]
