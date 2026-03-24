@@ -48,9 +48,13 @@ komodo_bws_secrets:
   - name: komodo-dean-admin-password
     bws_id: "44e040b1-20d8-4f7e-bbfa-b417012a69f9"
 
-# Runner secrets (reuse existing GitHub App from k3s ARC setup)
+# Runner secrets (reuse existing from k3s ARC setup)
 runner_bws_secrets:
   - name: github-app-arc-id
     bws_id: "2c57558f-d185-4410-ad9d-b385015c9302"
   - name: github-app-arc-private-key
     bws_id: "0015f9ab-dd5e-4649-a262-b385015ceac1"
+  - name: docker-hub-k3s-runner-api-key
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: github-pat-k3s-dean-gitops
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"

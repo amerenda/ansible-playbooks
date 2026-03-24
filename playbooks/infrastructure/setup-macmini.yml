@@ -310,6 +310,28 @@
       tags: [mini-secrets]
       when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
+    - name: Write DockerHub token to runner secrets
+      copy:
+        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'docker-hub-k3s-runner-api-key') | first).stdout }}"
+        dest: /Users/{{ target_user }}/.config/runner-secrets/docker-hub-k3s-runner-api-key
+        owner: "{{ target_user }}"
+        mode: '0600'
+      become: yes
+      no_log: true
+      tags: [mini-secrets]
+      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
+
+    - name: Write GitOps PAT to runner secrets
+      copy:
+        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-pat-k3s-dean-gitops') | first).stdout }}"
+        dest: /Users/{{ target_user }}/.config/runner-secrets/github-pat-k3s-dean-gitops
+        owner: "{{ target_user }}"
+        mode: '0600'
+      become: yes
+      no_log: true
+      tags: [mini-secrets]
+      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
+
     # ─── Komodo: Deploy ──────────────────────────────────────────────────
     - name: Create Komodo data directories
       file:
