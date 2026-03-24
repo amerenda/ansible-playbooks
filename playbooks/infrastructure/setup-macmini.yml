@@ -188,16 +188,19 @@
 
     - name: Check if bws CLI is installed
       stat:
-        path: "{{ homebrew_bin }}/bws"
+        path: /usr/local/bin/bws
       register: bws_check
       tags: [mini-secrets]
 
-    - name: Install bws CLI via Homebrew
-      community.general.homebrew:
-        name: bitwarden-sdk-secrets
-        state: present
-      become: no
+    - name: Download and install bws CLI
+      shell: |
+        curl -sL https://github.com/bitwarden/sdk-internal/releases/latest/download/bws-aarch64-apple-darwin.zip -o /tmp/bws.zip
+        unzip -o /tmp/bws.zip -d /tmp/bws-extract
+        sudo mv /tmp/bws-extract/bws /usr/local/bin/bws
+        sudo chmod +x /usr/local/bin/bws
+        rm -rf /tmp/bws.zip /tmp/bws-extract
       when: not bws_check.stat.exists
+      become: no
       tags: [mini-secrets]
 
     - name: Create Komodo secrets directory
@@ -210,7 +213,7 @@
       tags: [mini-secrets]
 
     - name: Fetch secrets from Bitwarden
-      shell: "{{ homebrew_bin }}/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
+      shell: "/usr/local/bin/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
       register: bws_secrets
       loop: "{{ komodo_bws_secrets }}"
       loop_control:
@@ -250,7 +253,7 @@
 
     # ─── Runner Secrets ────────────────────────────────────────────────
     - name: Fetch runner secrets from Bitwarden
-      shell: "{{ homebrew_bin }}/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
+      shell: "/usr/local/bin/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
       register: runner_secrets_fetched
       loop: "{{ runner_bws_secrets }}"
       loop_control:

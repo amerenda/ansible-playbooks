@@ -14,7 +14,6 @@ homebrew_packages:
   - htop
   - tailscale
   - kubernetes-cli
-  - bitwarden-sdk-secrets
 
 # System
 timezone: "America/New_York"
@@ -40,7 +39,6 @@ ha_version: "2026.1.2"
 komodo_bws_secrets:
   - name: komodo-dean-db-password
     bws_id: "6a636ea5-2545-45b5-8a0f-b417012a68fd"
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
   - name: komodo-dean-passkey
     bws_id: "239d3146-6227-4e87-a56b-b417012a693c"
   - name: komodo-dean-webhook-secret
