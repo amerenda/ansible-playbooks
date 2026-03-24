@@ -278,16 +278,6 @@
       tags: [mini-secrets]
       when: runners_env_check.stat.exists and runner_bws_secrets is defined
 
-    - name: Inject APP_ID into runners/compose.env
-      lineinfile:
-        path: "{{ compose_dir }}/runners/compose.env"
-        regexp: "^APP_ID="
-        line: "APP_ID={{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-app-arc-id') | first).stdout }}"
-      become: no
-      no_log: true
-      tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
-
     - name: Create runner secrets directory
       file:
         path: /Users/{{ target_user }}/.config/runner-secrets
@@ -297,6 +287,17 @@
       become: yes
       tags: [mini-secrets]
       when: runners_env_check.stat.exists
+
+    - name: Write APP_ID to runner secrets
+      copy:
+        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-app-arc-id') | first).stdout }}"
+        dest: /Users/{{ target_user }}/.config/runner-secrets/github-app-arc-id
+        owner: "{{ target_user }}"
+        mode: '0600'
+      become: yes
+      no_log: true
+      tags: [mini-secrets]
+      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
     - name: Write PEM key to runner secrets
       copy:
