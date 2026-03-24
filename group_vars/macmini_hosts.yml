@@ -55,6 +55,6 @@ runner_bws_secrets:
   - name: github-app-arc-private-key
     bws_id: "0015f9ab-dd5e-4649-a262-b385015ceac1"
   - name: docker-hub-k3s-runner-api-key
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "c5ad7fae-2f58-4a8b-9651-b413001cad7f"
   - name: github-pat-k3s-dean-gitops
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"
