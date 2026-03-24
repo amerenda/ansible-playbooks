@@ -162,19 +162,26 @@
       tags: [mini-orbstack]
 
     # ─── Komodo: Clone Repo ────────────────────────────────────────────
+    - name: Check if mac-mini-compose repo exists
+      stat:
+        path: "{{ compose_dir }}/.git"
+      register: compose_repo_check
+      tags: [mini-komodo, mini-secrets]
+
     - name: Clone mac-mini-compose repo
       git:
         repo: "{{ compose_repo }}"
         dest: "{{ compose_dir }}"
         version: main
-        force: no
       become: no
+      when: not compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets]
 
-    - name: Pull latest mac-mini-compose
-      shell: "git -C {{ compose_dir }} pull --ff-only"
+    - name: Pull latest mac-mini-compose (stash local changes from secret injection)
+      shell: "git -C {{ compose_dir }} stash && git -C {{ compose_dir }} pull --ff-only && git -C {{ compose_dir }} stash pop || true"
       become: no
       changed_when: false
+      when: compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets]
 
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
