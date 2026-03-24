@@ -288,23 +288,23 @@
       tags: [mini-secrets]
       when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
-    - name: Create runners secrets directory
+    - name: Create runner secrets directory
       file:
-        path: "{{ compose_dir }}/runners/secrets"
+        path: /etc/komodo/runner-secrets
         state: directory
         owner: "{{ target_user }}"
         mode: '0700'
-      become: no
+      become: yes
       tags: [mini-secrets]
       when: runners_env_check.stat.exists
 
-    - name: Write PEM key to runners/secrets/
+    - name: Write PEM key to runner secrets
       copy:
         content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-app-arc-private-key') | first).stdout }}"
-        dest: "{{ compose_dir }}/runners/secrets/github-app-arc-private-key"
+        dest: /etc/komodo/runner-secrets/github-app-arc-private-key
         owner: "{{ target_user }}"
         mode: '0600'
-      become: no
+      become: yes
       no_log: true
       tags: [mini-secrets]
       when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
