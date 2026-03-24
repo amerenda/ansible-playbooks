@@ -46,3 +46,10 @@ komodo_bws_secrets:
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
   - name: komodo-core-admin-password
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+
+# Runner secrets (reuse existing GitHub App from k3s ARC setup)
+runner_bws_secrets:
+  - name: github-app-arc-id
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+  - name: github-app-arc-private-key
+    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
