@@ -39,19 +39,20 @@ ha_version: "2026.1.2"
 # Replace the placeholder UUIDs below with your actual Bitwarden secret IDs.
 komodo_bws_secrets:
   - name: komodo-dean-db-password
+    bws_id: "6a636ea5-2545-45b5-8a0f-b417012a68fd"
     bws_id: "REPLACE_WITH_BWS_SECRET_ID"
   - name: komodo-dean-passkey
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "239d3146-6227-4e87-a56b-b417012a693c"
   - name: komodo-dean-webhook-secret
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "13dc9058-7086-40db-8a49-b417012a6978"
   - name: komodo-dean-jwt-secret
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "f9dec46d-9203-456a-a5d3-b417012a69b5"
   - name: komodo-dean-admin-password
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "44e040b1-20d8-4f7e-bbfa-b417012a69f9"
 
 # Runner secrets (reuse existing GitHub App from k3s ARC setup)
 runner_bws_secrets:
   - name: github-app-arc-id
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "2c57558f-d185-4410-ad9d-b385015c9302"
   - name: github-app-arc-private-key
-    bws_id: "REPLACE_WITH_BWS_SECRET_ID"
+    bws_id: "0015f9ab-dd5e-4649-a262-b385015ceac1"
