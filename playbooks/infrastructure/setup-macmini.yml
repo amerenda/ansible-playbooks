@@ -201,11 +201,12 @@
 
     - name: Download and install bws CLI
       shell: |
-        curl -sL https://github.com/bitwarden/sdk-internal/releases/latest/download/bws-aarch64-apple-darwin.zip -o /tmp/bws.zip
+        curl -sL https://github.com/bitwarden/sdk-sm/releases/download/bws-v2.0.0/bws-aarch64-apple-darwin-2.0.0.zip -o /tmp/bws.zip
         unzip -o /tmp/bws.zip -d /tmp/bws-extract
         sudo mv /tmp/bws-extract/bws /usr/local/bin/bws
         sudo chmod +x /usr/local/bin/bws
         rm -rf /tmp/bws.zip /tmp/bws-extract
+        /usr/local/bin/bws --version
       when: not bws_check.stat.exists
       become: no
       tags: [mini-secrets]
