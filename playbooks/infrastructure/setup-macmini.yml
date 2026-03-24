@@ -251,7 +251,13 @@
       no_log: true
       tags: [mini-secrets]
 
-    # ─── Runner Secrets ────────────────────────────────────────────────
+    # ─── Runner Secrets (only if runners are deployed) ─────────────────
+    - name: Check if runners compose.env exists
+      stat:
+        path: "{{ compose_dir }}/runners/compose.env"
+      register: runners_env_check
+      tags: [mini-secrets]
+
     - name: Fetch runner secrets from Bitwarden
       shell: "/usr/local/bin/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
       register: runner_secrets_fetched
@@ -262,7 +268,7 @@
       changed_when: false
       no_log: true
       tags: [mini-secrets]
-      when: runner_bws_secrets is defined and runner_bws_secrets | length > 0
+      when: runners_env_check.stat.exists and runner_bws_secrets is defined
 
     - name: Inject runner secrets into runners/compose.env
       lineinfile:
@@ -277,7 +283,7 @@
       become: no
       no_log: true
       tags: [mini-secrets]
-      when: runner_secrets_fetched is defined and runner_secrets_fetched.results is defined
+      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
     # ─── Komodo: Deploy ──────────────────────────────────────────────────
     - name: Create Komodo data directories
