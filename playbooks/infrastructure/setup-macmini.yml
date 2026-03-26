@@ -87,7 +87,7 @@
       tags: [mini-homebrew, mini-ollama]
 
     - name: Start Ollama service
-      shell: "brew services start ollama"
+      shell: "{{ homebrew_bin }}/brew services start ollama"
       environment:
         HOMEBREW_SERVICES_NO_DOMAIN_WARNING: "1"
       become: no
