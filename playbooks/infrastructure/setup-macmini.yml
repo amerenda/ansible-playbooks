@@ -380,6 +380,151 @@
       until: komodo_ready.rc == 0
       tags: [mini-komodo]
 
+    # ─── Komodo: Bootstrap GitOps pipeline via API ────────────────────────
+    - name: Get Komodo admin password from fetched secrets
+      set_fact:
+        komodo_admin_password: "{{ (bws_secrets.results | selectattr('item.name', 'equalto', 'komodo-dean-admin-password') | first).stdout }}"
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Login to Komodo API
+      uri:
+        url: "http://localhost:9120/auth/login/LoginLocalUser"
+        method: POST
+        body_format: json
+        body:
+          username: admin
+          password: "{{ komodo_admin_password }}"
+        status_code: 200
+      register: komodo_login
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Set Komodo JWT
+      set_fact:
+        komodo_jwt: "{{ komodo_login.json.data.jwt }}"
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Check for existing git provider account
+      uri:
+        url: "http://localhost:9120/read/ListGitProviderAccounts"
+        method: POST
+        body_format: json
+        body: {}
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      register: git_providers
+      tags: [mini-komodo]
+
+    - name: Get GITOPS_PAT from fetched runner secrets
+      set_fact:
+        gitops_pat: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-pat-k3s-dean-gitops') | first).stdout }}"
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Create GitHub git provider account
+      uri:
+        url: "http://localhost:9120/write/CreateGitProviderAccount"
+        method: POST
+        body_format: json
+        body:
+          account:
+            name: amerenda
+            domain: github.com
+            https: true
+            username: amerenda
+            token: "{{ gitops_pat }}"
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      when: git_providers.json | length == 0
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Check for existing resource syncs
+      uri:
+        url: "http://localhost:9120/read/ListResourceSyncs"
+        method: POST
+        body_format: json
+        body: {}
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      register: resource_syncs
+      tags: [mini-komodo]
+
+    - name: Create ResourceSync for mac-mini-compose
+      uri:
+        url: "http://localhost:9120/write/CreateResourceSync"
+        method: POST
+        body_format: json
+        body:
+          name: mac-mini-compose
+          config:
+            repo: amerenda/mac-mini-compose
+            branch: main
+            resource_path:
+              - "resource-sync/stacks.toml"
+            git_account: amerenda
+            git_provider: github.com
+            git_https: true
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      when: resource_syncs.json | length == 0
+      tags: [mini-komodo]
+
+    - name: Trigger initial resource sync
+      uri:
+        url: "http://localhost:9120/execute/RunSync"
+        method: POST
+        body_format: json
+        body:
+          sync: mac-mini-compose
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      register: sync_result
+      tags: [mini-komodo]
+
+    - name: Wait for sync to complete
+      uri:
+        url: "http://localhost:9120/read/GetUpdate"
+        method: POST
+        body_format: json
+        body:
+          id: "{{ sync_result.json._id['$oid'] }}"
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      register: sync_status
+      until: sync_status.json.status == "Complete"
+      retries: 24
+      delay: 5
+      tags: [mini-komodo]
+
+    - name: Verify stacks are running
+      uri:
+        url: "http://localhost:9120/read/ListStacks"
+        method: POST
+        body_format: json
+        body: {}
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      register: stacks_status
+      tags: [mini-komodo]
+
+    - name: Display stack status
+      debug:
+        msg: "Stack '{{ item.name }}': state={{ item.info.state | default('deploying') }}"
+      loop: "{{ stacks_status.json }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [mini-komodo]
+
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
       shell: "{{ homebrew_bin }}/tailscale status 2>&1"
@@ -422,15 +567,16 @@
           Komodo UI: http://{{ macmini_ip }}:9120
             Admin user: admin (change password on first login!)
 
-          Containers (managed by Komodo):
-            - Komodo Core + Periphery + FerretDB + Postgres
+          Komodo stacks (deployed via resource-sync):
+          {% for stack in stacks_status.json | default([]) %}
+            - {{ stack.name }}: {{ stack.info.state | default('deploying') }}
+          {% endfor %}
 
           Next steps:
-            1. Log into Komodo: http://{{ macmini_ip }}:9120
-            2. Add stacks from the mac-mini-compose repo (HA, monitoring, etc.)
-            3. Configure GitHub webhook for auto-deploy
-            4. Enable auto-login: System Settings > Users & Groups > Automatic Login
-            5. If Tailscale not authenticated: ssh mini && tailscale up --accept-routes --ssh
+            1. Verify Komodo: https://komodo.amer.dev (or http://{{ macmini_ip }}:9120)
+            2. Configure GitHub webhook for auto-deploy on push
+            3. Enable auto-login: System Settings > Users & Groups > Automatic Login
+            4. If Tailscale not authenticated: ssh mini && tailscale up --accept-routes --ssh
 
           ════════════════════════════════════════
       tags: [mini-summary]
