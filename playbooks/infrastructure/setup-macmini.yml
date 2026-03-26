@@ -15,11 +15,12 @@
 #
 # Tags:
 #   macmini         — Everything
-#   mini-homebrew   — Install Homebrew + packages + OrbStack
+#   mini-homebrew   — Install Homebrew + packages + OrbStack + Ollama
 #   mini-system     — Hostname, timezone, energy settings
 #   mini-orbstack   — Start and configure OrbStack
+#   mini-ollama     — Install and start Ollama + pull default model
 #   mini-secrets    — Fetch secrets from Bitwarden, write to disk
-#   mini-komodo     — Clone compose repo, deploy Komodo
+#   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-summary    — Show setup summary
 
@@ -76,6 +77,38 @@
         state: present
       become: no
       tags: [mini-homebrew]
+
+    # ─── Ollama (native, not Docker — needs Metal GPU) ────────────────────
+    - name: Install Ollama
+      community.general.homebrew:
+        name: ollama
+        state: present
+      become: no
+      tags: [mini-homebrew, mini-ollama]
+
+    - name: Start Ollama service
+      shell: "brew services start ollama"
+      environment:
+        HOMEBREW_SERVICES_NO_DOMAIN_WARNING: "1"
+      become: no
+      changed_when: false
+      tags: [mini-ollama]
+
+    - name: Wait for Ollama to be ready
+      shell: "curl -sf http://localhost:11434/api/tags > /dev/null 2>&1"
+      register: ollama_ready
+      become: no
+      retries: 12
+      delay: 5
+      until: ollama_ready.rc == 0
+      tags: [mini-ollama]
+
+    - name: Pull default Ollama model for HA voice assistant
+      shell: "{{ homebrew_bin }}/ollama pull llama3.1:8b"
+      become: no
+      register: ollama_pull
+      changed_when: "'pulling' in ollama_pull.stdout"
+      tags: [mini-ollama]
 
     # ─── System ────────────────────────────────────────────────────────────
     - name: Set timezone
