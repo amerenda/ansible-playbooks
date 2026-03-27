@@ -22,6 +22,7 @@
 #   mini-secrets    — Fetch secrets from Bitwarden, write to disk
 #   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
 #   mini-tailscale  — Tailscale VPN setup
+#   mini-bluebubbles — Install BlueBubbles iMessage proxy
 #   mini-summary    — Show setup summary
 
 - name: Setup Mac Mini M4 as Docker host
@@ -583,6 +584,77 @@
           If not authenticated, SSH into the Mini and run:
             tailscale up --accept-routes --ssh
       tags: [mini-tailscale]
+
+    # ─── BlueBubbles (iMessage proxy) ───────────────────────────────────────
+    - name: Check if BlueBubbles is already installed
+      stat:
+        path: "/Applications/BlueBubbles.app"
+      register: bluebubbles_check
+      tags: [mini-bluebubbles]
+
+    - name: Download BlueBubbles DMG
+      get_url:
+        url: "https://github.com/BlueBubblesApp/bluebubbles-server/releases/download/v{{ bluebubbles_version }}/BlueBubbles-{{ bluebubbles_version }}-arm64.dmg"
+        dest: "/tmp/BlueBubbles.dmg"
+        mode: '0644'
+      become: no
+      when: not bluebubbles_check.stat.exists
+      tags: [mini-bluebubbles]
+
+    - name: Mount BlueBubbles DMG
+      shell: "hdiutil attach /tmp/BlueBubbles.dmg -nobrowse -noverify -noautoopen"
+      register: dmg_mount
+      become: no
+      when: not bluebubbles_check.stat.exists
+      tags: [mini-bluebubbles]
+
+    - name: Copy BlueBubbles to Applications
+      copy:
+        src: "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64/BlueBubbles.app"
+        dest: "/Applications/BlueBubbles.app"
+        remote_src: yes
+        mode: preserve
+      become: yes
+      when: not bluebubbles_check.stat.exists
+      tags: [mini-bluebubbles]
+
+    - name: Unmount BlueBubbles DMG
+      shell: 'hdiutil detach "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64" || true'
+      become: no
+      when: not bluebubbles_check.stat.exists
+      tags: [mini-bluebubbles]
+
+    - name: Clean up DMG
+      file:
+        path: /tmp/BlueBubbles.dmg
+        state: absent
+      become: no
+      tags: [mini-bluebubbles]
+
+    - name: Add BlueBubbles to Login Items
+      shell: >
+        osascript -e 'tell application "System Events" to
+        make login item at end with properties
+        {path:"/Applications/BlueBubbles.app", hidden:false}'
+      become: no
+      register: login_item
+      changed_when: "'exists' not in login_item.stderr"
+      failed_when: false
+      tags: [mini-bluebubbles]
+
+    - name: Show BlueBubbles post-install steps
+      debug:
+        msg: |
+          BlueBubbles installed to /Applications/BlueBubbles.app
+
+          Manual steps required (connect via VNC to {{ macmini_ip }}:5900):
+            1. Open BlueBubbles.app
+            2. System Settings > Privacy & Security > Full Disk Access > add BlueBubbles
+            3. Complete the setup wizard (set server password, skip proxy)
+            4. Ensure iMessage is signed in via Messages.app
+
+          Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
+      tags: [mini-bluebubbles]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary

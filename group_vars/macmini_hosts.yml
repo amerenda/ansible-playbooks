@@ -21,6 +21,9 @@ timezone: "America/New_York"
 # Container images
 ha_version: "2026.1.2"
 
+# BlueBubbles (iMessage proxy)
+bluebubbles_version: "1.9.9"
+
 # ─── Bitwarden Secrets Manager ────────────────────────────────────────────
 # Each entry maps a secret file name to a Bitwarden secret ID.
 # Create these secrets in Bitwarden Secrets Manager before running the playbook.
