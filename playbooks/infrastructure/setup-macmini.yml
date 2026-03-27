@@ -608,27 +608,19 @@
       when: not bluebubbles_check.stat.exists
       tags: [mini-bluebubbles]
 
-    - name: Copy BlueBubbles to Applications
-      copy:
-        src: "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64/BlueBubbles.app"
-        dest: "/Applications/BlueBubbles.app"
-        remote_src: yes
-        mode: preserve
+    - name: Copy BlueBubbles to Applications and clear quarantine
+      shell: |
+        cp -R "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64/BlueBubbles.app" /Applications/
+        xattr -cr /Applications/BlueBubbles.app
+        chown -R {{ target_user }}:staff /Applications/BlueBubbles.app
       become: yes
       when: not bluebubbles_check.stat.exists
       tags: [mini-bluebubbles]
 
-    - name: Unmount BlueBubbles DMG
-      shell: 'hdiutil detach "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64" || true'
+    - name: Unmount BlueBubbles DMG and clean up
+      shell: 'hdiutil detach "/Volumes/BlueBubbles {{ bluebubbles_version }}-arm64" || true; rm -f /tmp/BlueBubbles.dmg'
       become: no
       when: not bluebubbles_check.stat.exists
-      tags: [mini-bluebubbles]
-
-    - name: Clean up DMG
-      file:
-        path: /tmp/BlueBubbles.dmg
-        state: absent
-      become: no
       tags: [mini-bluebubbles]
 
     - name: Add BlueBubbles to Login Items
