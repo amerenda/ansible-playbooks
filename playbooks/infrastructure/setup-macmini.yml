@@ -270,6 +270,13 @@
       tags: [mini-komodo, mini-secrets]
 
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
+    # All secret injection is handled by scripts/inject-secrets.sh in the
+    # mac-mini-compose repo. This section installs prerequisites and runs
+    # the script. The same script runs at boot via LaunchDaemon.
+    #
+    # Secret rotation: update in BWS → run inject-secrets.sh (or reboot).
+    # Komodo deploys also refresh secrets via stacks.toml pre_deploy.
+
     - name: Validate bws_access_token is provided
       fail:
         msg: |
@@ -296,142 +303,55 @@
       become: no
       tags: [mini-secrets]
 
-    - name: Create Komodo secrets directory
-      file:
-        path: "{{ komodo_dir }}/secrets"
-        state: directory
-        owner: "{{ target_user }}"
-        mode: '0700'
-      become: no
-      tags: [mini-secrets]
-
-    - name: Fetch secrets from Bitwarden
-      shell: "/usr/local/bin/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
-      register: bws_secrets
-      loop: "{{ komodo_bws_secrets }}"
-      loop_control:
-        label: "{{ item.name }}"
-      become: no
-      changed_when: false
-      no_log: true
-      tags: [mini-secrets]
-
-    - name: Write secret files for Komodo _FILE pattern
+    - name: Write BWS access token to disk
       copy:
-        content: "{{ item.stdout }}"
-        dest: "{{ komodo_dir }}/secrets/{{ item.item.name }}"
+        content: "{{ bws_access_token }}"
+        dest: "/Users/{{ target_user }}/.bws-secret"
         owner: "{{ target_user }}"
         mode: '0600'
-      loop: "{{ bws_secrets.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
       become: no
       no_log: true
       tags: [mini-secrets]
 
-    - name: Inject plaintext secrets into Komodo compose.env
-      lineinfile:
-        path: "{{ komodo_dir }}/compose.env"
-        regexp: "^{{ item.key }}="
-        line: "{{ item.key }}={{ (bws_secrets.results | selectattr('item.name', 'equalto', item.secret_name) | first).stdout }}"
-      loop:
-        - { key: "KOMODO_DB_PASSWORD", secret_name: "komodo-dean-db-password" }
-        - { key: "KOMODO_INIT_ADMIN_PASSWORD", secret_name: "komodo-dean-admin-password" }
-        - { key: "PERIPHERY_PASSKEYS", secret_name: "komodo-dean-passkey" }
-      loop_control:
-        label: "{{ item.key }}"
-      become: no
-      no_log: true
-      tags: [mini-secrets]
-
-    # ─── Runner Secrets (only if runners are deployed) ─────────────────
-    - name: Check if runners compose.env exists
-      stat:
-        path: "{{ compose_dir }}/runners/compose.env"
-      register: runners_env_check
-      tags: [mini-secrets]
-
-    - name: Fetch runner secrets from Bitwarden
-      shell: "/usr/local/bin/bws secret get {{ item.bws_id }} --access-token '{{ bws_access_token }}' | {{ homebrew_bin }}/jq -r '.value'"
-      register: runner_secrets_fetched
-      loop: "{{ runner_bws_secrets }}"
-      loop_control:
-        label: "{{ item.name }}"
-      become: no
-      changed_when: false
-      no_log: true
-      tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_bws_secrets is defined
-
-    - name: Create runner secrets directory
+    - name: Create /etc/komodo directory
       file:
-        path: /Users/{{ target_user }}/.config/runner-secrets
+        path: /etc/komodo
         state: directory
-        owner: "{{ target_user }}"
-        mode: '0700'
-      become: yes
-      tags: [mini-secrets]
-      when: runners_env_check.stat.exists
-
-    - name: Deploy runner entrypoint wrapper script
-      copy:
-        content: |
-          #!/bin/bash
-          export APP_ID=$(cat /run/secrets/github-app-arc-id)
-          export APP_PRIVATE_KEY=$(cat /run/secrets/github-app-arc-private-key)
-          export DOCKERHUB_TOKEN=$(cat /run/secrets/docker-hub-k3s-runner-api-key)
-          export GITOPS_PAT=$(cat /run/secrets/github-pat-k3s-dean-gitops)
-          exec /entrypoint.sh "$@"
-        dest: /Users/{{ target_user }}/.config/runner-secrets/entrypoint-wrapper.sh
         owner: "{{ target_user }}"
         mode: '0755'
       become: yes
       tags: [mini-secrets]
-      when: runners_env_check.stat.exists
 
-    - name: Write APP_ID to runner secrets
+    - name: Install inject-secrets LaunchDaemon
       copy:
-        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-app-arc-id') | first).stdout }}"
-        dest: /Users/{{ target_user }}/.config/runner-secrets/github-app-arc-id
-        owner: "{{ target_user }}"
-        mode: '0600'
+        src: "{{ compose_dir }}/launchd/com.local.inject-secrets.plist"
+        dest: /Library/LaunchDaemons/com.local.inject-secrets.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
       become: yes
-      no_log: true
       tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
-    - name: Write PEM key to runner secrets
-      copy:
-        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-app-arc-private-key') | first).stdout }}"
-        dest: /Users/{{ target_user }}/.config/runner-secrets/github-app-arc-private-key
-        owner: "{{ target_user }}"
-        mode: '0600'
+    - name: Load inject-secrets LaunchDaemon
+      shell: "launchctl load /Library/LaunchDaemons/com.local.inject-secrets.plist 2>/dev/null || true"
       become: yes
-      no_log: true
+      changed_when: false
       tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
-    - name: Write DockerHub token to runner secrets
-      copy:
-        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'docker-hub-k3s-runner-api-key') | first).stdout }}"
-        dest: /Users/{{ target_user }}/.config/runner-secrets/docker-hub-k3s-runner-api-key
-        owner: "{{ target_user }}"
-        mode: '0600'
+    - name: Run inject-secrets.sh to populate all secrets
+      shell: "bash {{ compose_dir }}/scripts/inject-secrets.sh"
       become: yes
-      no_log: true
       tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
-    - name: Write GitOps PAT to runner secrets
-      copy:
-        content: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-pat-k3s-dean-gitops') | first).stdout }}"
-        dest: /Users/{{ target_user }}/.config/runner-secrets/github-pat-k3s-dean-gitops
+    - name: Fix ownership on compose directory after root-run script
+      file:
+        path: "{{ compose_dir }}"
         owner: "{{ target_user }}"
-        mode: '0600'
+        group: staff
+        recurse: no
       become: yes
-      no_log: true
       tags: [mini-secrets]
-      when: runners_env_check.stat.exists and runner_secrets_fetched.results is defined
 
     # ─── Komodo: Deploy ──────────────────────────────────────────────────
     - name: Create Komodo data directories
@@ -466,9 +386,16 @@
       tags: [mini-komodo]
 
     # ─── Komodo: Bootstrap GitOps pipeline via API ────────────────────────
-    - name: Get Komodo admin password from fetched secrets
+    - name: Read Komodo admin password from injected secret file
+      slurp:
+        src: "{{ komodo_dir }}/secrets/komodo-dean-admin-password"
+      register: admin_pass_file
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Set Komodo admin password fact
       set_fact:
-        komodo_admin_password: "{{ (bws_secrets.results | selectattr('item.name', 'equalto', 'komodo-dean-admin-password') | first).stdout }}"
+        komodo_admin_password: "{{ admin_pass_file.content | b64decode }}"
       no_log: true
       tags: [mini-komodo]
 
@@ -503,9 +430,16 @@
       register: git_providers
       tags: [mini-komodo]
 
-    - name: Get GITOPS_PAT from fetched runner secrets
+    - name: Read GITOPS_PAT from injected secret file
+      slurp:
+        src: /etc/komodo/runner-secrets/github-pat-k3s-dean-gitops
+      register: gitops_pat_file
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Set GITOPS_PAT fact
       set_fact:
-        gitops_pat: "{{ (runner_secrets_fetched.results | selectattr('item.name', 'equalto', 'github-pat-k3s-dean-gitops') | first).stdout }}"
+        gitops_pat: "{{ gitops_pat_file.content | b64decode }}"
       no_log: true
       tags: [mini-komodo]
 
