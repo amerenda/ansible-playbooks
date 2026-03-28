@@ -195,6 +195,57 @@
       become: no
       tags: [mini-orbstack]
 
+    # ─── OrbStack LAN fix (workaround for host networking bug in v2.0.5) ──
+    - name: Install OrbStack LAN bridge fix LaunchAgent
+      copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.local.orbstack-lan-fix</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>/bin/bash</string>
+                  <string>-c</string>
+                  <string>
+          # Wait for OrbStack to be running
+          for i in $(seq 1 60); do
+            /opt/homebrew/bin/orbctl status 2>/dev/null | grep -q Running &amp;&amp; break
+            sleep 2
+          done
+          # Wait for Docker to be responsive
+          for i in $(seq 1 30); do
+            /Users/{{ target_user }}/.orbstack/bin/docker info >/dev/null 2>&amp;1 &amp;&amp; break
+            sleep 2
+          done
+          # Test if LAN is already reachable from a container
+          if /Users/{{ target_user }}/.orbstack/bin/docker run --rm --network host alpine ping -c 1 -W 3 10.100.20.1 >/dev/null 2>&amp;1; then
+            exit 0
+          fi
+          # LAN broken — restart OrbStack
+          /opt/homebrew/bin/orbctl stop
+          sleep 5
+          /opt/homebrew/bin/orbctl start
+                  </string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+          </dict>
+          </plist>
+        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.local.orbstack-lan-fix.plist"
+        owner: "{{ target_user }}"
+        mode: '0644'
+      become: no
+      tags: [mini-orbstack]
+
+    - name: Load OrbStack LAN fix LaunchAgent
+      shell: "launchctl load /Users/{{ target_user }}/Library/LaunchAgents/com.local.orbstack-lan-fix.plist 2>/dev/null || true"
+      become: no
+      changed_when: false
+      tags: [mini-orbstack]
+
     # ─── Komodo: Clone Repo ────────────────────────────────────────────
     - name: Check if mac-mini-compose repo exists
       stat:
