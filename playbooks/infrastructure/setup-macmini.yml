@@ -418,7 +418,7 @@
       no_log: true
       tags: [mini-komodo]
 
-    - name: Check for existing git provider account
+    - name: List existing git provider accounts
       uri:
         url: "http://localhost:9120/read/ListGitProviderAccounts"
         method: POST
@@ -443,7 +443,7 @@
       no_log: true
       tags: [mini-komodo]
 
-    - name: Create GitHub git provider account
+    - name: Create GitHub git provider account (first run)
       uri:
         url: "http://localhost:9120/write/CreateGitProviderAccount"
         method: POST
@@ -459,6 +459,25 @@
           Authorization: "{{ komodo_jwt }}"
         status_code: 200
       when: git_providers.json | length == 0
+      no_log: true
+      tags: [mini-komodo]
+
+    - name: Update GitHub git provider PAT (subsequent runs)
+      uri:
+        url: "http://localhost:9120/write/UpdateGitProviderAccount"
+        method: POST
+        body_format: json
+        body:
+          id: "{{ git_providers.json[0]._id['$oid'] }}"
+          account:
+            domain: github.com
+            https: true
+            username: amerenda
+            token: "{{ gitops_pat }}"
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      when: git_providers.json | length > 0
       no_log: true
       tags: [mini-komodo]
 
