@@ -92,6 +92,7 @@
         url: "https://{{ ansible_host }}:6443/healthz"
         method: GET
         validate_certs: no
+        status_code: [200, 401]
         timeout: 10
       register: etcd_health_before
       when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
@@ -122,9 +123,10 @@
         url: "https://{{ ansible_host }}:6443/healthz"
         method: GET
         validate_certs: no
+        status_code: [200, 401]
         timeout: 10
       register: k3s_health
-      until: k3s_health.status == 200
+      until: k3s_health.status in [200, 401]
       retries: 30
       delay: 5
       when: etcd_metrics_check is failed
@@ -145,6 +147,7 @@
         url: "https://{{ ansible_host }}:6443/healthz"
         method: GET
         validate_certs: no
+        status_code: [200, 401]
         timeout: 10
       register: etcd_health_after
 
