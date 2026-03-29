@@ -1,0 +1,163 @@
+---
+# Enable etcd metrics exposure on k3s controller nodes
+#
+# This playbook updates the k3s config to expose etcd metrics, then
+# prompts you to restart k3s ONE NODE AT A TIME to maintain quorum.
+#
+# SAFETY: serial: 1 ensures only one host is processed at a time.
+#         The playbook FAILS if you target more than one host at once
+#         without serial: 1 (enforced by pre_task).
+#
+# Usage:
+#   # Apply config to all controllers (one at a time):
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/enable-etcd-metrics.yml
+#
+#   # Apply to a specific controller:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/enable-etcd-metrics.yml --limit rpi5-0
+#
+# After each node, the playbook verifies etcd is healthy before proceeding.
+# You will be prompted before each restart.
+
+- name: Enable etcd metrics on k3s controllers
+  hosts: controllers
+  become: yes
+  gather_facts: yes
+  serial: 1
+  tags: [k3s, etcd, metrics]
+
+  vars:
+    k3s_config_path: /etc/rancher/k3s/config.yaml
+    etcd_metrics_port: 2381
+
+  pre_tasks:
+    - name: SAFETY — refuse to run on multiple hosts simultaneously
+      assert:
+        that:
+          - ansible_play_hosts | length == 1 or serial is defined
+        fail_msg: |
+          =============================================
+          REFUSING TO RUN ON MULTIPLE HOSTS AT ONCE!
+          =============================================
+          Restarting multiple etcd members simultaneously
+          will break quorum and take down the cluster.
+
+          This playbook uses serial: 1 to process one
+          node at a time. If you see this error, something
+          has overridden that setting.
+          =============================================
+      run_once: false
+
+    - name: Check current k3s config
+      slurp:
+        src: "{{ k3s_config_path }}"
+      register: current_config
+
+    - name: Parse current config
+      set_fact:
+        k3s_config: "{{ current_config.content | b64decode | from_yaml }}"
+
+    - name: Check if etcd-expose-metrics is already enabled
+      set_fact:
+        etcd_metrics_already_enabled: "{{ k3s_config.get('etcd-expose-metrics', false) | bool }}"
+
+    - name: Show current etcd-expose-metrics status
+      debug:
+        msg: "etcd-expose-metrics on {{ inventory_hostname }}: {{ etcd_metrics_already_enabled }}"
+
+  tasks:
+    - name: Add etcd-expose-metrics to k3s config
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^etcd-expose-metrics:'
+        line: 'etcd-expose-metrics: true'
+        insertafter: '^# etcd configuration'
+      register: config_changed
+      when: not etcd_metrics_already_enabled
+
+    - name: Check if etcd metrics are already accessible
+      uri:
+        url: "http://{{ ansible_host }}:{{ etcd_metrics_port }}/metrics"
+        method: GET
+        timeout: 5
+      register: etcd_metrics_check
+      ignore_errors: yes
+
+    - name: Skip restart if metrics already working
+      debug:
+        msg: "etcd metrics already accessible on {{ inventory_hostname }}:{{ etcd_metrics_port }} — no restart needed"
+      when: etcd_metrics_check is succeeded
+
+    - name: Verify etcd cluster health before restart
+      shell: |
+        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
+          --endpoints=https://127.0.0.1:2379 \
+          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
+          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
+          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
+          endpoint health --write-out=table 2>&1
+      register: etcd_health_before
+      changed_when: false
+      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+
+    - name: Show etcd health before restart
+      debug:
+        msg: "{{ etcd_health_before.stdout_lines | default(['skipped']) }}"
+      when: etcd_health_before is not skipped
+
+    - name: CONFIRM — Restart k3s on {{ inventory_hostname }}?
+      pause:
+        prompt: |
+
+          About to restart k3s on {{ inventory_hostname }} ({{ ansible_host }}).
+          This will briefly take this etcd member offline.
+
+          Press ENTER to continue, or Ctrl+C then A to abort.
+      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+
+    - name: Restart k3s
+      systemd:
+        name: k3s
+        state: restarted
+      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+
+    - name: Wait for k3s API to come back
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        timeout: 10
+      register: k3s_health
+      until: k3s_health.status == 200
+      retries: 30
+      delay: 5
+      when: etcd_metrics_check is failed
+
+    - name: Wait for etcd metrics to become available
+      uri:
+        url: "http://{{ ansible_host }}:{{ etcd_metrics_port }}/metrics"
+        method: GET
+        timeout: 5
+      register: etcd_metrics_verify
+      until: etcd_metrics_verify.status == 200
+      retries: 12
+      delay: 5
+      when: etcd_metrics_check is failed
+
+    - name: Verify etcd cluster health after restart
+      shell: |
+        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
+          --endpoints=https://127.0.0.1:2379 \
+          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
+          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
+          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
+          endpoint health --write-out=table 2>&1
+      register: etcd_health_after
+      changed_when: false
+
+    - name: Show etcd health after restart
+      debug:
+        msg: "{{ etcd_health_after.stdout_lines }}"
+
+    - name: Confirm etcd metrics are working
+      debug:
+        msg: "✅ {{ inventory_hostname }} — etcd metrics exposed on port {{ etcd_metrics_port }}, cluster healthy"
