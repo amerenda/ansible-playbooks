@@ -95,7 +95,7 @@
         status_code: [200, 401]
         timeout: 10
       register: etcd_health_before
-      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+      when: etcd_metrics_check is failed
 
     - name: Show API health before restart
       debug:
@@ -110,13 +110,13 @@
           This will briefly take this etcd member offline.
 
           Press ENTER to continue, or Ctrl+C then A to abort.
-      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+      when: etcd_metrics_check is failed
 
     - name: Restart k3s
       systemd:
         name: k3s
         state: restarted
-      when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
+      when: etcd_metrics_check is failed
 
     - name: Wait for k3s API to come back
       uri:
