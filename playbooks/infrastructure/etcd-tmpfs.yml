@@ -26,7 +26,14 @@
     k3s_config_path: /etc/rancher/k3s/config.yaml
     etcd_data_dir: /var/lib/rancher/k3s/server/db/etcd
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
-    tmpfs_size: "{{ '256M' if inventory_hostname == 'rpi4-0' else '512M' }}"
+    tmpfs_size: "512M"
+    etcd_version: "v3.5.21"
+    etcdctl_path: /tmp/etcdctl
+    etcd_certs: >-
+      --endpoints=https://127.0.0.1:2379
+      --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
+      --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key
+      --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt
 
   pre_tasks:
     - name: SAFETY — refuse to run on multiple hosts simultaneously
@@ -134,6 +141,60 @@
         state: stopped
       when: tmpfs_check.stdout == "not_mounted"
 
+    # --- Remove stale etcd member from a peer ---
+    # When etcd data dir is wiped (tmpfs mount), the cluster still has this
+    # node registered. k3s will fail with "duplicate node name" unless we
+    # remove the old member first. We run etcdctl on a peer node.
+
+    - name: Identify a peer controller
+      set_fact:
+        peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Download etcdctl on peer (if not present)
+      delegate_to: "{{ peer_node }}"
+      shell: |
+        if [ -x {{ etcdctl_path }} ]; then
+          echo "already present"
+          exit 0
+        fi
+        ARCH=$(uname -m)
+        case $ARCH in
+          aarch64) ARCH=arm64 ;;
+          x86_64) ARCH=amd64 ;;
+        esac
+        curl -sL "https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-${ARCH}.tar.gz" \
+          | tar xz --strip-components=1 -C /tmp "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Find and remove stale etcd member for this node
+      delegate_to: "{{ peer_node }}"
+      shell: |
+        # Get member list, find the member with this node's IP in peer URLs
+        MEMBER_ID=$(ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
+          member list -w json | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        for m in data.get('members', []):
+          for url in m.get('peerURLs', []):
+            if '{{ ansible_host }}' in url:
+              print(format(m['ID'], 'x'))
+              sys.exit(0)
+        ")
+        if [ -n "$MEMBER_ID" ]; then
+          echo "Removing stale member $MEMBER_ID ({{ inventory_hostname }})"
+          ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} member remove "$MEMBER_ID"
+        else
+          echo "No stale member found for {{ ansible_host }}"
+        fi
+      register: member_removal
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Show member removal result
+      debug:
+        msg: "{{ member_removal.stdout_lines | default(['skipped']) }}"
+      when: tmpfs_check.stdout == "not_mounted"
+
     - name: Mount tmpfs at etcd data dir
       mount:
         path: "{{ etcd_data_dir }}"
@@ -166,27 +227,16 @@
         url: "https://{{ ansible_host }}:6443/healthz"
         method: GET
         validate_certs: no
-        timeout: 10
-      register: k3s_health
-      until: k3s_health.status == 200
-      retries: 60
-      delay: 5
-
-    - name: Wait for etcd to be healthy
-      uri:
-        url: "https://{{ ansible_host }}:6443/healthz"
-        method: GET
-        validate_certs: no
         status_code: [200, 401]
         timeout: 10
-      register: api_health_after
-      until: api_health_after.status in [200, 401]
-      retries: 30
+      register: k3s_health
+      until: k3s_health.status in [200, 401]
+      retries: 60
       delay: 5
 
     - name: Show API health after migration
       debug:
-        msg: "k3s API on {{ inventory_hostname }}: {{ api_health_after.status }}"
+        msg: "k3s API on {{ inventory_hostname }}: {{ k3s_health.status }}"
 
     - name: Verify tmpfs is mounted
       shell: df -h {{ etcd_data_dir }} | tail -1
