@@ -39,8 +39,9 @@ kube-apiserver-arg:
 # etcd configuration
 etcd-expose-metrics: true
 etcd-disable-snapshots: false
-etcd-snapshot-schedule-cron: "0 */6 * * *"
-etcd-snapshot-retention: 5
+etcd-snapshot-schedule-cron: "{{ etcd_snapshot_schedule }}"
+etcd-snapshot-retention: {{ etcd_snapshot_retention }}
+etcd-snapshot-compress: {{ etcd_snapshot_compress | default(true) }}
 etcd-snapshot-dir: "{{ etcd_data_dir }}/snapshots"
 
 # Logging

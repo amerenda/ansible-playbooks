@@ -1,0 +1,281 @@
+---
+# Migrate etcd data directory to tmpfs (RAM disk) on k3s controllers
+#
+# SD cards have poor random I/O, causing etcd performance warnings.
+# This playbook mounts tmpfs at the etcd data dir so etcd runs in RAM,
+# with frequent snapshots written to persistent storage (SD card).
+#
+# SAFETY: serial: 1 ensures only one node restarts at a time,
+#         preserving etcd quorum throughout the migration.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/etcd-tmpfs.yml
+#
+# After running, etcd data lives in RAM. On reboot, the node rejoins
+# from peers (no restore needed). For full cluster power loss, use
+# ~/restore-k3s.sh on one node.
+
+- name: Migrate etcd to tmpfs on k3s controllers
+  hosts: controllers
+  become: yes
+  gather_facts: yes
+  serial: 1
+  tags: [k3s, etcd, tmpfs]
+
+  vars:
+    k3s_config_path: /etc/rancher/k3s/config.yaml
+    etcd_data_dir: /var/lib/rancher/k3s/server/db/etcd
+    snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
+    tmpfs_size: "{{ '256M' if inventory_hostname == 'rpi4-0' else '512M' }}"
+
+  pre_tasks:
+    - name: SAFETY — refuse to run on multiple hosts simultaneously
+      assert:
+        that:
+          - ansible_play_hosts | length == 1 or serial is defined
+        fail_msg: |
+          =============================================
+          REFUSING TO RUN ON MULTIPLE HOSTS AT ONCE!
+          =============================================
+          Restarting multiple etcd members simultaneously
+          will break quorum and take down the cluster.
+          =============================================
+      run_once: false
+
+    - name: Check if tmpfs is already mounted on etcd data dir
+      shell: mountpoint -q {{ etcd_data_dir }} && echo "mounted" || echo "not_mounted"
+      register: tmpfs_check
+      changed_when: false
+
+    - name: Show current mount status
+      debug:
+        msg: "{{ inventory_hostname }}: etcd data dir is {{ tmpfs_check.stdout }}"
+
+    - name: Verify etcd cluster health before changes
+      shell: |
+        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
+          --endpoints=https://127.0.0.1:2379 \
+          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
+          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
+          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
+          endpoint health --write-out=table 2>&1
+      register: etcd_health_before
+      changed_when: false
+
+    - name: Show etcd health
+      debug:
+        msg: "{{ etcd_health_before.stdout_lines }}"
+
+  tasks:
+    # --- fstab + tmpfs ---
+
+    - name: Add tmpfs entry to fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*tmpfs\s+{{ etcd_data_dir }}'
+        line: "tmpfs {{ etcd_data_dir }} tmpfs nodev,nosuid,size={{ tmpfs_size }} 0 0"
+        state: present
+      register: fstab_changed
+
+    # --- k3s config: snapshot frequency ---
+
+    - name: Read current k3s config
+      slurp:
+        src: "{{ k3s_config_path }}"
+      register: current_config
+
+    - name: Parse current config
+      set_fact:
+        k3s_config: "{{ current_config.content | b64decode | from_yaml }}"
+
+    - name: Update snapshot schedule to every 5 minutes
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^etcd-snapshot-schedule-cron:'
+        line: 'etcd-snapshot-schedule-cron: "*/5 * * * *"'
+      register: snapshot_schedule_changed
+
+    - name: Update snapshot retention to 12
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^etcd-snapshot-retention:'
+        line: 'etcd-snapshot-retention: 12'
+      register: snapshot_retention_changed
+
+    - name: Add snapshot compression
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^etcd-snapshot-compress:'
+        line: 'etcd-snapshot-compress: true'
+        insertafter: '^etcd-snapshot-retention:'
+      register: snapshot_compress_changed
+
+    # --- Take a snapshot before making changes ---
+
+    - name: Take etcd snapshot before migration
+      shell: |
+        k3s etcd-snapshot save --name pre-tmpfs-migration-{{ inventory_hostname }}
+      when: tmpfs_check.stdout == "not_mounted"
+
+    # --- Stop k3s, mount tmpfs, start k3s ---
+
+    - name: CONFIRM — Migrate {{ inventory_hostname }} to tmpfs?
+      pause:
+        prompt: |
+
+          About to stop k3s on {{ inventory_hostname }} ({{ ansible_host }}),
+          mount tmpfs ({{ tmpfs_size }}) at {{ etcd_data_dir }},
+          and restart. etcd will rejoin from peers.
+
+          Press ENTER to continue, or Ctrl+C then A to abort.
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Stop k3s
+      systemd:
+        name: k3s
+        state: stopped
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Mount tmpfs at etcd data dir
+      mount:
+        path: "{{ etcd_data_dir }}"
+        src: tmpfs
+        fstype: tmpfs
+        opts: "nodev,nosuid,size={{ tmpfs_size }}"
+        state: mounted
+      when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Start k3s
+      systemd:
+        name: k3s
+        state: started
+      when: tmpfs_check.stdout == "not_mounted"
+
+    # --- Restart k3s if only config changed (tmpfs already mounted) ---
+
+    - name: Restart k3s for config changes
+      systemd:
+        name: k3s
+        state: restarted
+      when:
+        - tmpfs_check.stdout == "mounted"
+        - snapshot_schedule_changed is changed or snapshot_retention_changed is changed or snapshot_compress_changed is changed
+
+    # --- Verification ---
+
+    - name: Wait for k3s API to come back
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        timeout: 10
+      register: k3s_health
+      until: k3s_health.status == 200
+      retries: 60
+      delay: 5
+
+    - name: Wait for etcd member to rejoin
+      shell: |
+        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
+          --endpoints=https://127.0.0.1:2379 \
+          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
+          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
+          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
+          endpoint health --write-out=table 2>&1
+      register: etcd_health_after
+      until: etcd_health_after.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Show etcd health after migration
+      debug:
+        msg: "{{ etcd_health_after.stdout_lines }}"
+
+    - name: Verify tmpfs is mounted
+      shell: df -h {{ etcd_data_dir }} | tail -1
+      register: df_output
+      changed_when: false
+
+    - name: Show tmpfs status
+      debug:
+        msg: "{{ inventory_hostname }}: {{ df_output.stdout }}"
+
+    # --- Deploy recovery script ---
+
+    - name: Deploy restore-k3s.sh to home directory
+      copy:
+        dest: /home/alex/restore-k3s.sh
+        owner: alex
+        group: alex
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          # restore-k3s.sh — Restore k3s etcd from snapshot after full cluster power loss
+          #
+          # Use this ONLY when all 3 control plane nodes lost power simultaneously
+          # and etcd cannot form quorum (all tmpfs mounts are empty, no peers available).
+          #
+          # Run on ONE node only (the designated primary). Then start k3s on the other nodes.
+
+          SNAPSHOT_DIR="{{ snapshot_dir }}"
+          RED='\033[0;31m'
+          GREEN='\033[0;32m'
+          YELLOW='\033[1;33m'
+          NC='\033[0m'
+
+          echo -e "${YELLOW}=== k3s etcd Snapshot Restore ===${NC}"
+          echo ""
+
+          # Check if k3s is running
+          if systemctl is-active --quiet k3s; then
+              echo -e "${RED}ERROR: k3s is currently running. Stop it first:${NC}"
+              echo "  sudo systemctl stop k3s"
+              exit 1
+          fi
+
+          # Find latest snapshot
+          LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)
+
+          if [ -z "$LATEST" ]; then
+              echo -e "${RED}ERROR: No snapshots found in ${SNAPSHOT_DIR}${NC}"
+              exit 1
+          fi
+
+          echo "Latest snapshot: ${LATEST}"
+          echo "  Modified: $(stat -c '%y' "$LATEST")"
+          echo "  Size: $(du -h "$LATEST" | cut -f1)"
+          echo ""
+
+          # Confirm
+          read -p "Restore from this snapshot? This will reset the cluster. [y/N] " -n 1 -r
+          echo ""
+          if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+              echo "Aborted."
+              exit 0
+          fi
+
+          echo ""
+          echo -e "${YELLOW}Running cluster-reset with snapshot restore...${NC}"
+          sudo k3s server --cluster-reset --cluster-reset-restore-path="$LATEST"
+
+          echo ""
+          echo -e "${GREEN}Restore complete.${NC}"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Start k3s on THIS node:"
+          echo "     sudo systemctl start k3s"
+          echo ""
+          echo "  2. Wait for it to be healthy:"
+          echo "     sudo k3s kubectl get nodes"
+          echo ""
+          echo "  3. On the OTHER control plane nodes, just start k3s:"
+          echo "     sudo systemctl start k3s"
+          echo "     (They will rejoin from this node automatically)"
+          echo ""
+
+    - name: Confirm migration complete
+      debug:
+        msg: "{{ inventory_hostname }} — etcd running on tmpfs ({{ tmpfs_size }}), snapshots every 5min to SD card, restore script at ~/restore-k3s.sh"
