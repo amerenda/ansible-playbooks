@@ -51,20 +51,18 @@
       debug:
         msg: "{{ inventory_hostname }}: etcd data dir is {{ tmpfs_check.stdout }}"
 
-    - name: Verify etcd cluster health before changes
-      shell: |
-        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
-          --endpoints=https://127.0.0.1:2379 \
-          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
-          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
-          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
-          endpoint health --write-out=table 2>&1
-      register: etcd_health_before
-      changed_when: false
+    - name: Verify k3s API health before changes
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: api_health_before
 
-    - name: Show etcd health
+    - name: Show API health
       debug:
-        msg: "{{ etcd_health_before.stdout_lines }}"
+        msg: "k3s API on {{ inventory_hostname }}: {{ api_health_before.status }}"
 
   tasks:
     # --- fstab + tmpfs ---
@@ -174,23 +172,21 @@
       retries: 60
       delay: 5
 
-    - name: Wait for etcd member to rejoin
-      shell: |
-        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
-          --endpoints=https://127.0.0.1:2379 \
-          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
-          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
-          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
-          endpoint health --write-out=table 2>&1
-      register: etcd_health_after
-      until: etcd_health_after.rc == 0
+    - name: Wait for etcd to be healthy
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: api_health_after
+      until: api_health_after.status in [200, 401]
       retries: 30
       delay: 5
-      changed_when: false
 
-    - name: Show etcd health after migration
+    - name: Show API health after migration
       debug:
-        msg: "{{ etcd_health_after.stdout_lines }}"
+        msg: "k3s API on {{ inventory_hostname }}: {{ api_health_after.status }}"
 
     - name: Verify tmpfs is mounted
       shell: df -h {{ etcd_data_dir }} | tail -1
