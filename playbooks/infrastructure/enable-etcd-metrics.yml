@@ -87,21 +87,18 @@
         msg: "etcd metrics already accessible on {{ inventory_hostname }}:{{ etcd_metrics_port }} — no restart needed"
       when: etcd_metrics_check is succeeded
 
-    - name: Verify etcd cluster health before restart
-      shell: |
-        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
-          --endpoints=https://127.0.0.1:2379 \
-          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
-          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
-          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
-          endpoint health --write-out=table 2>&1
+    - name: Verify k3s API health before restart
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        timeout: 10
       register: etcd_health_before
-      changed_when: false
       when: etcd_metrics_check is failed and (config_changed is changed or not etcd_metrics_already_enabled)
 
-    - name: Show etcd health before restart
+    - name: Show API health before restart
       debug:
-        msg: "{{ etcd_health_before.stdout_lines | default(['skipped']) }}"
+        msg: "k3s API on {{ inventory_hostname }}: {{ etcd_health_before.status | default('skipped') }}"
       when: etcd_health_before is not skipped
 
     - name: CONFIRM — Restart k3s on {{ inventory_hostname }}?
@@ -143,20 +140,17 @@
       delay: 5
       when: etcd_metrics_check is failed
 
-    - name: Verify etcd cluster health after restart
-      shell: |
-        ETCDCTL_API=3 /var/lib/rancher/k3s/data/current/bin/etcdctl \
-          --endpoints=https://127.0.0.1:2379 \
-          --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt \
-          --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key \
-          --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
-          endpoint health --write-out=table 2>&1
+    - name: Verify k3s API health after restart
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        timeout: 10
       register: etcd_health_after
-      changed_when: false
 
-    - name: Show etcd health after restart
+    - name: Show API health after restart
       debug:
-        msg: "{{ etcd_health_after.stdout_lines }}"
+        msg: "k3s API on {{ inventory_hostname }}: {{ etcd_health_after.status }}"
 
     - name: Confirm etcd metrics are working
       debug:
