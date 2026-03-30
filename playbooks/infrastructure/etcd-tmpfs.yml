@@ -49,7 +49,7 @@
     cluster_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
     cluster_dns: "10.43.0.10"
-    etcd_snapshot_schedule: "*/5 * * * *"
+    etcd_snapshot_interval: 5  # staggered per-node in template
     etcd_snapshot_retention: 12
     etcd_snapshot_compress: true
     controller_ips: "{{ groups['controllers'] | map('extract', hostvars, 'ansible_host') | list }}"

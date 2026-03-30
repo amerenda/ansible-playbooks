@@ -39,7 +39,11 @@ kube-apiserver-arg:
 # etcd configuration
 etcd-expose-metrics: true
 etcd-disable-snapshots: false
-etcd-snapshot-schedule-cron: "{{ etcd_snapshot_schedule }}"
+{% set controller_index = groups['controllers'].index(inventory_hostname) %}
+{% set interval = etcd_snapshot_interval | default(5) | int %}
+{% set offset = controller_index % interval %}
+# Staggered snapshot: node {{ controller_index }} of {{ groups['controllers'] | length }}, offset {{ offset }} min
+etcd-snapshot-schedule-cron: "{{ offset }}-59/{{ interval }} * * * *"
 etcd-snapshot-retention: {{ etcd_snapshot_retention }}
 etcd-snapshot-compress: {{ etcd_snapshot_compress | default(true) }}
 etcd-snapshot-dir: "{{ etcd_data_dir }}/snapshots"
