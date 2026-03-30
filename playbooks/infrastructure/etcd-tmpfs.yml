@@ -24,7 +24,9 @@
 
   vars:
     k3s_config_path: /etc/rancher/k3s/config.yaml
-    etcd_data_dir: /var/lib/rancher/k3s/server/db/etcd
+    k3s_data_dir: /var/lib/rancher/k3s
+    etcd_data_dir: /var/lib/rancher/k3s/server/db
+    etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
     tmpfs_size: "512M"
     etcd_version: "v3.5.21"
@@ -34,6 +36,11 @@
       --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
       --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key
       --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt
+
+    # Variables needed by the k3s server config template
+    controller_ips: "{{ groups['controllers'] | map('extract', hostvars, 'ansible_host') | list }}"
+    first_controller: "{{ groups['controllers'][0] }}"
+    is_first_controller: "{{ inventory_hostname == first_controller }}"
 
   pre_tasks:
     - name: SAFETY — refuse to run on multiple hosts simultaneously
@@ -50,7 +57,7 @@
       run_once: false
 
     - name: Check if tmpfs is already mounted on etcd data dir
-      shell: mountpoint -q {{ etcd_data_dir }} && echo "mounted" || echo "not_mounted"
+      shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
       register: tmpfs_check
       changed_when: false
 
@@ -77,43 +84,41 @@
     - name: Add tmpfs entry to fstab
       lineinfile:
         path: /etc/fstab
-        regexp: '^\s*tmpfs\s+{{ etcd_data_dir }}'
-        line: "tmpfs {{ etcd_data_dir }} tmpfs nodev,nosuid,size={{ tmpfs_size }} 0 0"
+        regexp: '^\s*tmpfs\s+{{ etcd_mount_dir }}'
+        line: "tmpfs {{ etcd_mount_dir }} tmpfs nodev,nosuid,size={{ tmpfs_size }} 0 0"
         state: present
       register: fstab_changed
 
-    # --- k3s config: snapshot frequency ---
+    # --- k3s config: render full template ---
+    # CRITICAL: The full config template must be rendered, not just lineinfile edits.
+    # Without token/server/flannel-backend, k3s falls back to standalone kine/SQLite
+    # mode when the etcd data dir is empty, instead of rejoining the etcd cluster.
 
-    - name: Read current k3s config
+    - name: Read k3s token from existing config
+      shell: >-
+        grep '^token:' {{ k3s_config_path }} | head -1 |
+        sed 's/^token: *//' | tr -d '"'
+      register: existing_token
+      changed_when: false
+
+    - name: Read k3s token from server token file (fallback)
       slurp:
-        src: "{{ k3s_config_path }}"
-      register: current_config
+        src: /var/lib/rancher/k3s/server/token
+      register: token_file
+      when: existing_token.stdout | default('') | length == 0
 
-    - name: Parse current config
+    - name: Set k3s_token fact
       set_fact:
-        k3s_config: "{{ current_config.content | b64decode | from_yaml }}"
+        k3s_token: "{{ existing_token.stdout if existing_token.stdout | length > 0 else (token_file.content | b64decode | trim) }}"
 
-    - name: Update snapshot schedule to every 5 minutes
-      lineinfile:
-        path: "{{ k3s_config_path }}"
-        regexp: '^etcd-snapshot-schedule-cron:'
-        line: 'etcd-snapshot-schedule-cron: "*/5 * * * *"'
-      register: snapshot_schedule_changed
-
-    - name: Update snapshot retention to 12
-      lineinfile:
-        path: "{{ k3s_config_path }}"
-        regexp: '^etcd-snapshot-retention:'
-        line: 'etcd-snapshot-retention: 12'
-      register: snapshot_retention_changed
-
-    - name: Add snapshot compression
-      lineinfile:
-        path: "{{ k3s_config_path }}"
-        regexp: '^etcd-snapshot-compress:'
-        line: 'etcd-snapshot-compress: true'
-        insertafter: '^etcd-snapshot-retention:'
-      register: snapshot_compress_changed
+    - name: Render full k3s server config from template
+      template:
+        src: templates/k3s-server-config.yaml.j2
+        dest: "{{ k3s_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: config_changed
 
     # --- Take a snapshot before making changes ---
 
@@ -129,7 +134,7 @@
         prompt: |
 
           About to stop k3s on {{ inventory_hostname }} ({{ ansible_host }}),
-          mount tmpfs ({{ tmpfs_size }}) at {{ etcd_data_dir }},
+          mount tmpfs ({{ tmpfs_size }}) at {{ etcd_mount_dir }},
           and restart. etcd will rejoin from peers.
 
           Press ENTER to continue, or Ctrl+C then A to abort.
@@ -190,9 +195,19 @@
         msg: "{{ member_removal.stdout | default('No stale member found — skipped') }}"
       when: tmpfs_check.stdout == "not_mounted"
 
+    - name: Remove stale kine state.db (prevents SQLite fallback)
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ etcd_data_dir }}/state.db"
+        - "{{ etcd_data_dir }}/state.db-wal"
+        - "{{ etcd_data_dir }}/state.db-shm"
+      when: tmpfs_check.stdout == "not_mounted"
+
     - name: Mount tmpfs at etcd data dir
       mount:
-        path: "{{ etcd_data_dir }}"
+        path: "{{ etcd_mount_dir }}"
         src: tmpfs
         fstype: tmpfs
         opts: "nodev,nosuid,size={{ tmpfs_size }}"
@@ -213,7 +228,7 @@
         state: restarted
       when:
         - tmpfs_check.stdout == "mounted"
-        - snapshot_schedule_changed is changed or snapshot_retention_changed is changed or snapshot_compress_changed is changed
+        - config_changed is changed
 
     # --- Verification ---
 
@@ -234,7 +249,7 @@
         msg: "k3s API on {{ inventory_hostname }}: {{ k3s_health.status }}"
 
     - name: Verify tmpfs is mounted
-      shell: df -h {{ etcd_data_dir }} | tail -1
+      shell: df -h {{ etcd_mount_dir }} | tail -1
       register: df_output
       changed_when: false
 
