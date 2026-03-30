@@ -2,7 +2,12 @@
 # k3s etcd auto-recovery on boot
 # Runs before k3s.service. Handles:
 #   - Empty tmpfs after reboot (normal: peers available, do nothing)
-#   - Full power loss (no peers: restore from latest snapshot)
+#   - Full power loss (no peers: one node restores, others wait)
+#
+# LEADER ELECTION: Only the designated restore node ({{ restore_node }})
+# performs snapshot restore. Other nodes wait up to 3 minutes for a peer
+# to come up. This prevents all nodes from restoring simultaneously and
+# creating independent clusters.
 #
 # Managed by ansible — do not edit manually.
 
@@ -13,6 +18,8 @@ ETCD_DATA_DIR="{{ etcd_data_dir }}"
 SNAPSHOT_DIR="{{ snapshot_dir }}"
 CONFIG="/etc/rancher/k3s/config.yaml"
 LOG_TAG="k3s-etcd-recovery"
+IS_RESTORE_NODE={{ 'true' if inventory_hostname == restore_node else 'false' }}
+RESTORE_NODE_IP="{{ hostvars[restore_node]['ansible_host'] }}"
 
 log() { logger -t "$LOG_TAG" "$1"; echo "$1"; }
 
@@ -30,26 +37,46 @@ fi
 
 log "tmpfs is empty — checking if peers are available"
 
-# Check if any peer controller is reachable on port 6443
-PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
-PEER_UP=false
-for peer in "${PEERS[@]}"; do
-    if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
-        log "Peer $peer is up — k3s will rejoin from peers"
-        PEER_UP=true
-        break
-    fi
-done
+# Clean up stale state that would prevent rejoin
+rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
+rm -f "${ETCD_DATA_DIR}/state.db" "${ETCD_DATA_DIR}/state.db-wal" "${ETCD_DATA_DIR}/state.db-shm" 2>/dev/null || true
 
-if [ "$PEER_UP" = true ]; then
-    # Clean up any stale state that would prevent rejoin
-    rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
-    rm -f "${ETCD_DATA_DIR}/state.db" "${ETCD_DATA_DIR}/state.db-wal" "${ETCD_DATA_DIR}/state.db-shm" 2>/dev/null || true
+# Check if any peer controller is reachable on port 6443
+check_peers() {
+    local PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
+    for peer in "${PEERS[@]}"; do
+        if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
+            log "Peer $peer is up — k3s will rejoin from peers"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if check_peers; then
     log "Cleaned up stale state — k3s will handle rejoin"
     exit 0
 fi
 
-log "No peers reachable — full power loss detected, restoring from snapshot"
+# --- No peers reachable — full power loss ---
+
+if [ "$IS_RESTORE_NODE" = false ]; then
+    # Non-restore nodes: wait for the restore node to come up
+    log "No peers up. This is NOT the restore node — waiting for {{ restore_node }} ($RESTORE_NODE_IP)"
+    for i in $(seq 1 36); do
+        sleep 5
+        if check_peers; then
+            log "Peer came up after $((i * 5))s — k3s will rejoin"
+            exit 0
+        fi
+    done
+    log "WARNING: Waited 3 minutes, no peers up. Letting k3s attempt startup anyway."
+    exit 0
+fi
+
+# --- This IS the restore node ---
+
+log "No peers reachable — full power loss detected. This is the restore node."
 
 # Find latest snapshot
 LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)

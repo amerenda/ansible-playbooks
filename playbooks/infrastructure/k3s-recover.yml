@@ -62,6 +62,10 @@
     peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
     peer_ip: "{{ hostvars[peer_node]['ansible_host'] }}"
 
+    # Designated restore node for full power loss (most RAM = best candidate)
+    # Only this node restores from snapshot. Others wait for it.
+    restore_node: "rpi5-1"
+
   pre_tasks:
     - name: Validate k3s_token is provided
       assert:

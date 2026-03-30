@@ -60,6 +60,9 @@
     peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
     peer_ip: "{{ hostvars[peer_node]['ansible_host'] }}"
 
+    # Designated restore node for full power loss (most RAM = best candidate)
+    restore_node: "rpi5-1"
+
   pre_tasks:
     - name: SAFETY — refuse to run on multiple hosts simultaneously
       assert:
