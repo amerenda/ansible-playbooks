@@ -77,6 +77,11 @@
           =============================================
       run_once: false
 
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "etcd tmpfs migration on {{ inventory_hostname }}"
+
     - name: Check if tmpfs is already mounted on etcd data dir
       shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
       register: tmpfs_check
@@ -397,6 +402,17 @@
           echo "     sudo systemctl start k3s"
           echo "     (They will rejoin from this node automatically)"
           echo ""
+
+    # --- Post-flight: wait for node and verify cluster ---
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post etcd tmpfs migration on {{ inventory_hostname }}"
 
     - name: Confirm migration complete
       debug:

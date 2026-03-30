@@ -1,0 +1,28 @@
+---
+# Wait for a specific node to become Ready after a disruptive operation.
+#
+# Usage:
+#   - name: Wait for node to rejoin
+#     ansible.builtin.include_tasks: tasks/wait-for-node-ready.yml
+#     vars:
+#       wait_for_node: "{{ inventory_hostname }}"
+#
+# Optional:
+#   wait_retries: 30  (default)
+#   wait_delay: 10    (default, seconds)
+
+- name: "Wait for {{ wait_for_node }} to become Ready"
+  ansible.builtin.command: >-
+    kubectl get node {{ wait_for_node }}
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  register: node_ready
+  until: node_ready.stdout == "True"
+  retries: "{{ wait_retries | default(30) }}"
+  delay: "{{ wait_delay | default(10) }}"
+  delegate_to: "{{ groups['controllers'] | difference([wait_for_node]) | first | default(groups['controllers'][0]) }}"
+  changed_when: false
+  become: true
+
+- name: "{{ wait_for_node }} is Ready"
+  ansible.builtin.debug:
+    msg: "Node {{ wait_for_node }} rejoined cluster and is Ready."

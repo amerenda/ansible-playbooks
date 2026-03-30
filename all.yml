@@ -24,6 +24,11 @@
   import_playbook: playbooks/infrastructure/post-k3s.yml
   tags: [k3s, install, post-setup]
 
+# Smoke test — validate cluster health after all k3s setup
+- name: Cluster Smoke Test
+  import_playbook: playbooks/infrastructure/smoke-test.yml
+  tags: [smoke-test, verify]
+
 # Mac Mini — standalone Docker host (OrbStack), not part of k3s cluster
 # Run standalone: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml
 # Via all.yml:  ansible-playbook -i inventory/inventory.ini all.yml --tags macmini

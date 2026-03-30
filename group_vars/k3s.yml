@@ -3,6 +3,16 @@
 # Security - Set your k3s token
 # k3s_token: "your-secure-token-here"  # Uncomment and set your token
 
+# BWS (Bitwarden Secrets Manager) secret IDs
+# All UUIDs live here — fetch-secrets.yml iterates over this dict.
+# To get values: bws secret get <UUID> --access-token <TOKEN>
+bws_secrets:
+  k3s_token: ""                                            # TODO: create in BWS
+  argocd_repo_pat: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"
+  bitwarden_eso_api_key: ""                                # TODO: create in BWS
+  bitwarden_eso_org_id: ""                                 # TODO: create in BWS
+  docker_hub_token: "c5ad7fae-2f58-4a8b-9651-b413001cad7f"
+
 # Filesystem configuration
 # resize_rootfs: true  # Set to true to resize root filesystem to use all available space
 

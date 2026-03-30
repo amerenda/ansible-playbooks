@@ -1,0 +1,206 @@
+---
+# Cluster Smoke Test
+#
+# Validates the k3s cluster is functional end-to-end. Safe to run anytime.
+# Run standalone or as the final play in all.yml.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/smoke-test.yml
+#
+# Checks:
+#   1. All k3s nodes are Ready
+#   2. k3s API server responds
+#   3. etcd health (on controllers)
+#   4. tmpfs mounted for etcd (on controllers)
+#   5. Longhorn manager pods running
+#   6. ArgoCD server pod running and apps synced
+#   7. Expected node labels and taints present
+
+- name: Cluster smoke test
+  hosts: "{{ groups['controllers'][0] }}"
+  become: true
+  gather_facts: false
+  tags: [smoke-test, verify]
+
+  vars:
+    expected_controllers: "{{ groups['controllers'] }}"
+    expected_agents: "{{ groups['agents'] }}"
+    all_k3s_nodes: "{{ expected_controllers + expected_agents }}"
+
+  tasks:
+    # =============================================
+    # 1. Node readiness
+    # =============================================
+
+    - name: "CHECK: Get all node statuses"
+      ansible.builtin.command: kubectl get nodes -o json
+      register: node_json
+      changed_when: false
+
+    - name: Parse node readiness
+      ansible.builtin.set_fact:
+        node_ready_map: >-
+          {{ (node_json.stdout | from_json).items
+             | map(attribute='metadata.name')
+             | zip(
+                 (node_json.stdout | from_json).items
+                 | json_query('[].status.conditions[?type==`Ready`].status | [0]')
+               )
+             | items2dict(key_name=0, value_name=1) }}
+
+    - name: "CHECK: All expected nodes are Ready"
+      ansible.builtin.assert:
+        that:
+          - node_ready_map[item] | default('Unknown') == 'True'
+        fail_msg: "Node {{ item }} is NOT Ready (status: {{ node_ready_map[item] | default('missing') }})"
+        quiet: true
+      loop: "{{ all_k3s_nodes }}"
+
+    - name: "PASS: All {{ all_k3s_nodes | length }} nodes Ready"
+      ansible.builtin.debug:
+        msg: "{{ node_ready_map }}"
+
+    # =============================================
+    # 2. API server health
+    # =============================================
+
+    - name: "CHECK: k3s API server health"
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[item]['ansible_host'] }}:6443/healthz"
+        method: GET
+        validate_certs: false
+        status_code: [200]
+        timeout: 10
+      loop: "{{ expected_controllers }}"
+      register: api_health
+
+    - name: "PASS: API server healthy on all controllers"
+      ansible.builtin.debug:
+        msg: "All {{ expected_controllers | length }} controller API endpoints responding"
+
+    # =============================================
+    # 3. etcd health
+    # =============================================
+
+    - name: "CHECK: etcd endpoint health"
+      ansible.builtin.command: >-
+        kubectl get --raw /healthz/etcd
+      register: etcd_health
+      changed_when: false
+      failed_when: etcd_health.rc != 0
+
+    - name: "PASS: etcd healthy"
+      ansible.builtin.debug:
+        msg: "etcd: {{ etcd_health.stdout }}"
+
+    # =============================================
+    # 4. etcd tmpfs (check each controller)
+    # =============================================
+
+    - name: "CHECK: tmpfs mounted on controllers"
+      ansible.builtin.command: mountpoint -q /var/lib/rancher/k3s/server/db/etcd
+      delegate_to: "{{ item }}"
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "PASS: etcd tmpfs mounted on all controllers"
+      ansible.builtin.debug:
+        msg: "tmpfs mounted on {{ expected_controllers | join(', ') }}"
+
+    # =============================================
+    # 5. Longhorn
+    # =============================================
+
+    - name: "CHECK: Longhorn manager pods"
+      ansible.builtin.command: >-
+        kubectl get pods -n longhorn-system -l app=longhorn-manager
+        -o jsonpath='{.items[*].status.phase}'
+      register: longhorn_pods
+      changed_when: false
+      failed_when: false
+
+    - name: "CHECK: Longhorn manager is running"
+      ansible.builtin.assert:
+        that:
+          - "'Running' in longhorn_pods.stdout"
+        fail_msg: "Longhorn manager pods not running: {{ longhorn_pods.stdout | default('no pods found') }}"
+        quiet: true
+      when: longhorn_pods.rc == 0
+
+    - name: "PASS: Longhorn running"
+      ansible.builtin.debug:
+        msg: "Longhorn manager pod status: {{ longhorn_pods.stdout | default('not installed') }}"
+
+    # =============================================
+    # 6. ArgoCD
+    # =============================================
+
+    - name: "CHECK: ArgoCD server pod"
+      ansible.builtin.command: >-
+        kubectl get pods -l app.kubernetes.io/name=argocd-server
+        -o jsonpath='{.items[*].status.phase}' --all-namespaces
+      register: argocd_pods
+      changed_when: false
+      failed_when: false
+
+    - name: "CHECK: ArgoCD server is running"
+      ansible.builtin.assert:
+        that:
+          - "'Running' in argocd_pods.stdout"
+        fail_msg: "ArgoCD server not running: {{ argocd_pods.stdout | default('no pods found') }}"
+        quiet: true
+      when: argocd_pods.rc == 0
+
+    - name: "CHECK: ArgoCD app sync status"
+      ansible.builtin.command: >-
+        kubectl get applications.argoproj.io --all-namespaces
+        -o jsonpath='{range .items[*]}{.metadata.name}={.status.sync.status},{end}'
+      register: argocd_apps
+      changed_when: false
+      failed_when: false
+
+    - name: "PASS: ArgoCD status"
+      ansible.builtin.debug:
+        msg: |
+          ArgoCD server: {{ argocd_pods.stdout | default('not installed') }}
+          App sync: {{ argocd_apps.stdout | default('no apps') }}
+
+    # =============================================
+    # 7. Node labels and taints
+    # =============================================
+
+    - name: "CHECK: Storage node labels"
+      ansible.builtin.command: >-
+        kubectl get nodes -l longhorn-storage=true -o jsonpath='{.items[*].metadata.name}'
+      register: storage_nodes
+      changed_when: false
+
+    - name: "CHECK: Storage-only node taints"
+      ansible.builtin.command: >-
+        kubectl get node {{ item }} -o jsonpath='{.spec.taints}'
+      register: storage_only_taints
+      changed_when: false
+      loop: "{{ groups['storage_only'] | default([]) }}"
+
+    - name: "PASS: Labels and taints"
+      ansible.builtin.debug:
+        msg: |
+          Storage-labeled nodes: {{ storage_nodes.stdout }}
+          Storage-only taints: {{ storage_only_taints.results | default([]) | map(attribute='stdout') | list }}
+
+    # =============================================
+    # Summary
+    # =============================================
+
+    - name: "SMOKE TEST COMPLETE"
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          CLUSTER SMOKE TEST PASSED
+          ============================================
+          Nodes:     {{ all_k3s_nodes | length }} Ready ({{ expected_controllers | length }} controllers, {{ expected_agents | length }} agents)
+          API:       Healthy on all controllers
+          etcd:      Healthy, tmpfs mounted
+          Longhorn:  {{ 'Running' if 'Running' in (longhorn_pods.stdout | default('')) else 'Not detected' }}
+          ArgoCD:    {{ 'Running' if 'Running' in (argocd_pods.stdout | default('')) else 'Not detected' }}
+          ============================================

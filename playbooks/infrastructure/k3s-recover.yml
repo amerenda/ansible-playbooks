@@ -171,6 +171,35 @@
       register: token_mismatch_count
       changed_when: false
 
+    # --- Cluster health check (informational in recovery mode) ---
+    # In recovery, we don't FAIL on unhealthy nodes (that's why we're recovering),
+    # but we log the state so the operator knows what they're working with.
+
+    - name: Check cluster health (informational)
+      ansible.builtin.command: kubectl get nodes -o json
+      register: recovery_node_status
+      delegate_to: "{{ groups['controllers'][0] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Show cluster node status
+      ansible.builtin.debug:
+        msg: >-
+          Cluster nodes:
+          {{ (recovery_node_status.stdout | default('{}') | from_json).items
+             | default([])
+             | map(attribute='metadata.name')
+             | zip(
+                 (recovery_node_status.stdout | default('{}') | from_json).items
+                 | default([])
+                 | json_query('[].status.conditions[?type==`Ready`].status | [0]')
+               )
+             | map('join', '=')
+             | list
+             | join(', ')
+             | default('unable to query cluster') }}
+      when: recovery_node_status.rc | default(1) == 0
+
     # --- Summarize state ---
 
     - name: Summarize node state
@@ -208,6 +237,15 @@
     # =============================================
     # PHASE 0: Token rotation (live, on running cluster)
     # =============================================
+
+    - name: Confirm token rotation
+      ansible.builtin.include_tasks: ../../tasks/confirm-destructive.yml
+      vars:
+        destructive_action: "rotate k3s cluster token on {{ inventory_hostname }}"
+        skipped_checks: "cluster health gate (token rotation changes auth for all nodes)"
+      when:
+        - rotate_token | bool
+        - inventory_hostname == ansible_play_hosts[0]
 
     - name: Rotate cluster token
       shell: >-
@@ -324,6 +362,13 @@
     # =============================================
     # PHASE 2: Force restore from snapshot
     # =============================================
+
+    - name: Confirm force restore
+      ansible.builtin.include_tasks: ../../tasks/confirm-destructive.yml
+      vars:
+        destructive_action: "wipe etcd and restore from snapshot on {{ inventory_hostname }}"
+        skipped_checks: "cluster health gate (force restore wipes and rebuilds etcd)"
+      when: force_restore | bool
 
     - name: Validate snapshot exists for force_restore
       assert:

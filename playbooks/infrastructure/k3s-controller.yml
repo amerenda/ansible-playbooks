@@ -39,6 +39,19 @@
     
 
   pre_tasks:
+    # --- Cluster safety gate (skip on fresh install) ---
+    - name: Check if k3s is already running (pre-gate)
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_pre_check
+      ignore_errors: true
+
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "k3s controller install/update on {{ inventory_hostname }}"
+      when: k3s_pre_check.status.ActiveState | default('inactive') == 'active'
+
     - name: Check if etcd data directory exists
       stat:
         path: "{{ etcd_data_dir }}"
@@ -234,6 +247,17 @@
       run_once: true
 
 
+
+    # --- Post-flight: wait for this node, then verify cluster health ---
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post k3s controller setup on {{ inventory_hostname }}"
 
   handlers:
     - name: restart k3s
