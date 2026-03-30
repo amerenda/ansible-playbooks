@@ -123,6 +123,11 @@ log "Restoring from snapshot: $LATEST"
 # Unmount tmpfs (cluster-reset renames the etcd dir, fails on mounted tmpfs)
 umount "$ETCD_MOUNT" 2>/dev/null || true
 
+# Clean any old etcd data on the SD card (exposed after unmounting tmpfs)
+# cluster-reset needs a clean dir to write into
+rm -rf "${ETCD_MOUNT:?}"/* 2>/dev/null || true
+rm -rf "${ETCD_MOUNT}-old-"* 2>/dev/null || true
+
 # Comment out server: line (cluster-reset refuses with it set)
 if grep -q '^server:' "$CONFIG"; then
     sed -i 's/^server:/#AUTORECOVERY#server:/' "$CONFIG"

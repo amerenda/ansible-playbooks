@@ -10,7 +10,8 @@ ConditionPathExists=/usr/local/bin/k3s
 Type=oneshot
 ExecStart=/usr/local/bin/k3s-etcd-recovery.sh
 RemainAfterExit=yes
-TimeoutStartSec=120
+# Worst case: node waits 3 min per higher-priority node (2 nodes max) + restore time
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target

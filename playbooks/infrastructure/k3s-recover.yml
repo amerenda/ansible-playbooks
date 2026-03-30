@@ -367,11 +367,31 @@
         mode: "0644"
       register: recovery_unit
 
+    - name: Ensure k3s service drop-in directory exists
+      file:
+        path: /etc/systemd/system/k3s.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Add k3s dependency on etcd recovery service
+      copy:
+        dest: /etc/systemd/system/k3s.service.d/etcd-recovery.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          After=k3s-etcd-recovery.service
+          Requires=k3s-etcd-recovery.service
+      register: k3s_dropin
+
     - name: Enable auto-recovery service
       systemd:
         name: k3s-etcd-recovery
         enabled: yes
-        daemon_reload: "{{ recovery_unit is changed }}"
+        daemon_reload: "{{ recovery_unit is changed or k3s_dropin is changed }}"
 
     # =============================================
     # PHASE 5: Verify
