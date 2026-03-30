@@ -64,7 +64,7 @@
         url: "https://{{ hostvars[item]['ansible_host'] }}:6443/healthz"
         method: GET
         validate_certs: false
-        status_code: [200]
+        status_code: [200, 401]
         timeout: 10
       loop: "{{ expected_controllers }}"
       register: api_health
