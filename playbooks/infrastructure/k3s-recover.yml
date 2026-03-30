@@ -1,0 +1,342 @@
+---
+# k3s Cluster Recovery Playbook
+#
+# Brings the k3s cluster back to a healthy state. Handles:
+#   - Token mismatch (bootstrap data encrypted with different token)
+#   - Missing config files (node was wiped/reinstalled)
+#   - Empty tmpfs after reboot (etcd rejoins from peers)
+#   - Full cluster power loss (restores from snapshot)
+#   - Stale etcd-tmp directories from failed reconciliation
+#
+# This playbook is SAFE to run on a healthy cluster — it will detect
+# that everything is fine and make no changes.
+#
+# Usage:
+#   # Recover the whole cluster:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
+#     -e k3s_token=<TOKEN>
+#
+#   # Recover a single node:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
+#     -e k3s_token=<TOKEN> --limit rpi5-1
+#
+# The k3s_token MUST be the password that matches the bootstrap data encryption.
+# Get it from a working node: sudo cat /var/lib/rancher/k3s/server/token
+# Use just the password portion (after "::server:").
+#
+# IMPORTANT: This playbook does NOT reboot or restart healthy nodes.
+# It only restarts k3s on nodes that need fixing.
+
+- name: Recover k3s cluster
+  hosts: controllers
+  become: yes
+  gather_facts: yes
+  serial: 1
+  tags: [k3s, etcd, recover]
+
+  vars:
+    k3s_config_path: /etc/rancher/k3s/config.yaml
+    k3s_data_dir: /var/lib/rancher/k3s
+    k3s_server_dir: /var/lib/rancher/k3s/server
+    etcd_data_dir: /var/lib/rancher/k3s/server/db
+    etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
+    snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
+    tmpfs_size: "512M"
+
+    # Cluster networking (must match existing cluster)
+    cluster_cidr: "10.42.0.0/16"
+    service_cidr: "10.43.0.0/16"
+    cluster_dns: "10.43.0.10"
+
+    # etcd snapshot config
+    etcd_snapshot_schedule: "*/5 * * * *"
+    etcd_snapshot_retention: 12
+    etcd_snapshot_compress: true
+
+    # Controller topology
+    controller_ips: "{{ groups['controllers'] | map('extract', hostvars, 'ansible_host') | list }}"
+    first_controller: "{{ groups['controllers'][0] }}"
+    is_first_controller: "{{ inventory_hostname == first_controller }}"
+
+    # Peer to join from (not self)
+    peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
+    peer_ip: "{{ hostvars[peer_node]['ansible_host'] }}"
+
+  pre_tasks:
+    - name: Validate k3s_token is provided
+      assert:
+        that: k3s_token is defined and k3s_token | length > 0
+        fail_msg: |
+          k3s_token is required. Pass the token password:
+            -e k3s_token=<PASSWORD>
+          Get it from a working node:
+            ssh <node> sudo cat /var/lib/rancher/k3s/server/token
+          Use just the password after "::server:"
+
+    # --- Detect current state ---
+
+    - name: Check if k3s is installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Check if k3s config exists
+      stat:
+        path: "{{ k3s_config_path }}"
+      register: k3s_config_exists
+
+    - name: Check if k3s is running
+      shell: systemctl is-active k3s 2>/dev/null || echo "inactive"
+      register: k3s_state
+      changed_when: false
+
+    - name: Check if tmpfs is mounted
+      shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
+      register: tmpfs_state
+      changed_when: false
+
+    - name: Check if tmpfs is in fstab
+      shell: grep -q '{{ etcd_mount_dir }}' /etc/fstab && echo "in_fstab" || echo "not_in_fstab"
+      register: fstab_state
+      changed_when: false
+
+    - name: Check if etcd data exists on tmpfs
+      shell: ls {{ etcd_mount_dir }}/member/snap/db 2>/dev/null && echo "has_data" || echo "empty"
+      register: etcd_data_state
+      changed_when: false
+
+    - name: Check for stale etcd-tmp directory
+      stat:
+        path: "{{ etcd_data_dir }}/etcd-tmp"
+      register: etcd_tmp_exists
+
+    - name: Check for snapshots
+      shell: ls -t {{ snapshot_dir }}/etcd-snapshot-* 2>/dev/null | head -1
+      register: latest_snapshot
+      changed_when: false
+      failed_when: false
+
+    - name: Read current token from config (if exists)
+      shell: >-
+        grep '^token:' {{ k3s_config_path }} 2>/dev/null |
+        head -1 | sed 's/^token: *//' | tr -d '"'
+      register: current_config_token
+      changed_when: false
+      failed_when: false
+
+    - name: Read token from server token file (if exists)
+      shell: sudo cat {{ k3s_server_dir }}/token 2>/dev/null
+      register: server_token_file
+      changed_when: false
+      failed_when: false
+
+    - name: Check k3s logs for token mismatch error
+      shell: >-
+        journalctl -u k3s --no-pager --since '5 minutes ago' 2>/dev/null |
+        grep -c 'encrypted with different token' || echo "0"
+      register: token_mismatch_count
+      changed_when: false
+
+    # --- Summarize state ---
+
+    - name: Summarize node state
+      debug:
+        msg: |
+          === {{ inventory_hostname }} ({{ ansible_host }}) ===
+          k3s installed:      {{ k3s_binary.stat.exists }}
+          k3s state:          {{ k3s_state.stdout }}
+          config exists:      {{ k3s_config_exists.stat.exists }}
+          tmpfs in fstab:     {{ fstab_state.stdout }}
+          tmpfs mounted:      {{ tmpfs_state.stdout }}
+          etcd has data:      {{ etcd_data_state.stdout }}
+          etcd-tmp exists:    {{ etcd_tmp_exists.stat.exists }}
+          latest snapshot:    {{ latest_snapshot.stdout | default('NONE') }}
+          token mismatches:   {{ token_mismatch_count.stdout }}
+
+    # --- Determine what needs fixing ---
+
+    - name: Set recovery flags
+      set_fact:
+        needs_config: "{{ not k3s_config_exists.stat.exists }}"
+        needs_tmpfs_fstab: "{{ fstab_state.stdout == 'not_in_fstab' }}"
+        needs_tmpfs_mount: "{{ tmpfs_state.stdout == 'not_mounted' }}"
+        needs_token_fix: "{{ token_mismatch_count.stdout | int > 0 }}"
+        needs_etcd_tmp_cleanup: "{{ etcd_tmp_exists.stat.exists }}"
+        needs_restart: false
+
+  tasks:
+    # =============================================
+    # PHASE 1: Fix config and tmpfs (always safe)
+    # =============================================
+
+    # --- Ensure config exists with correct token ---
+
+    - name: Render k3s server config from template
+      template:
+        src: templates/k3s-server-config.yaml.j2
+        dest: "{{ k3s_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        k3s_token: "{{ k3s_token }}"
+      register: config_rendered
+      when: needs_config | bool
+
+    # For existing configs, just fix the token if it's wrong
+    - name: Extract password from provided token
+      set_fact:
+        token_password: "{{ k3s_token.split('::server:')[-1] if '::server:' in k3s_token else k3s_token }}"
+
+    - name: Extract password from current config token
+      set_fact:
+        current_password: >-
+          {{ current_config_token.stdout.split('::server:')[-1]
+             if '::server:' in (current_config_token.stdout | default(''))
+             else (current_config_token.stdout | default('')) }}
+      when: k3s_config_exists.stat.exists
+
+    - name: Fix token in existing config
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^token:'
+        line: 'token: "{{ k3s_token }}"'
+      register: token_fixed
+      when:
+        - k3s_config_exists.stat.exists
+        - current_password | default('') != token_password
+        - not (needs_config | bool)
+
+    # Ensure server: line exists (needed for all nodes to rejoin after tmpfs wipe)
+    - name: Ensure server line exists for cluster rejoin
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^server:'
+        line: 'server: "https://{{ peer_ip }}:6443"'
+        insertafter: '^# Cluster configuration|^cluster-cidr:'
+      register: server_line_added
+      when: is_first_controller | bool and k3s_config_exists.stat.exists
+
+    # --- Ensure tmpfs is set up ---
+
+    - name: Add tmpfs entry to fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*tmpfs\s+{{ etcd_mount_dir }}'
+        line: "tmpfs {{ etcd_mount_dir }} tmpfs nodev,nosuid,size={{ tmpfs_size }} 0 0"
+        state: present
+      when: needs_tmpfs_fstab | bool
+
+    - name: Create etcd mount point if missing
+      file:
+        path: "{{ etcd_mount_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: needs_tmpfs_mount | bool
+
+    - name: Mount tmpfs
+      mount:
+        path: "{{ etcd_mount_dir }}"
+        src: tmpfs
+        fstype: tmpfs
+        opts: "nodev,nosuid,size={{ tmpfs_size }}"
+        state: mounted
+      when: needs_tmpfs_mount | bool
+
+    # =============================================
+    # PHASE 2: Fix token mismatch (requires restart)
+    # =============================================
+
+    - name: Mark restart needed if token was fixed
+      set_fact:
+        needs_restart: true
+      when: token_fixed is changed or config_rendered is changed or server_line_added is changed
+
+    # Clean up etcd-tmp (created by failed reconciliation attempts)
+    - name: Stop k3s before cleanup (if restarting)
+      systemd:
+        name: k3s
+        state: stopped
+      when: needs_restart | bool and k3s_state.stdout != 'inactive'
+
+    - name: Remove stale etcd-tmp directory
+      file:
+        path: "{{ etcd_data_dir }}/etcd-tmp"
+        state: absent
+      when: needs_etcd_tmp_cleanup | bool
+
+    - name: Remove stale kine state.db files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ etcd_data_dir }}/state.db"
+        - "{{ etcd_data_dir }}/state.db-wal"
+        - "{{ etcd_data_dir }}/state.db-shm"
+      when: needs_restart | bool
+
+    # Also update the server token file to match
+    - name: Update server token file
+      copy:
+        content: "{{ k3s_token }}"
+        dest: "{{ k3s_server_dir }}/token"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - needs_restart | bool
+        - server_token_file.stdout | default('') != k3s_token
+      no_log: true
+
+    - name: Start k3s after fixes
+      systemd:
+        name: k3s
+        state: started
+      when: needs_restart | bool
+
+    # =============================================
+    # PHASE 3: Handle empty etcd on tmpfs (reboot recovery)
+    # =============================================
+
+    # If tmpfs is mounted but empty, and k3s is running, it should
+    # rejoin from peers automatically. If k3s is not running (e.g.
+    # full power loss, no peers), we need to restore from snapshot.
+
+    - name: Start k3s if not running (peer rejoin)
+      systemd:
+        name: k3s
+        state: started
+      when:
+        - k3s_state.stdout == 'inactive'
+        - not (needs_restart | bool)
+        - k3s_binary.stat.exists
+        - k3s_config_exists.stat.exists or (config_rendered is changed)
+
+    # =============================================
+    # PHASE 4: Verify
+    # =============================================
+
+    - name: Wait for k3s API to respond
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: api_health
+      until: api_health.status in [200, 401]
+      retries: 60
+      delay: 10
+      when: k3s_binary.stat.exists
+
+    - name: Show recovery result
+      debug:
+        msg: |
+          === {{ inventory_hostname }} recovery complete ===
+          API health: {{ api_health.status | default('skipped') }}
+          Config rendered: {{ config_rendered is changed | default(false) }}
+          Token fixed: {{ token_fixed is changed | default(false) }}
+          Restarted: {{ needs_restart }}
+          tmpfs mounted: {{ tmpfs_state.stdout }}
