@@ -7,7 +7,7 @@
 # All UUIDs live here — fetch-secrets.yml iterates over this dict.
 # To get values: bws secret get <UUID> --access-token <TOKEN>
 bws_secrets:
-  k3s_token: ""                                            # TODO: create in BWS
+  k3s_token: "ab7a85fd-3e47-4493-8ed1-b373011bdbb0"        # k3s-dean-etcd-token
   argocd_repo_pat: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"
   bitwarden_eso_api_key: ""                                # TODO: create in BWS
   bitwarden_eso_org_id: ""                                 # TODO: create in BWS
