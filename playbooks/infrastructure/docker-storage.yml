@@ -1,0 +1,98 @@
+---
+# Move Docker data root to /mnt/storage/docker
+#
+# Prerequisites:
+#   - /mnt/storage must already be mounted (RAID array)
+#   - Run with: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/docker-storage.yml --limit murderbot
+#   - Or: --limit archlinux, or --limit gpu_hosts for both
+#
+# What this does:
+#   1. Stops Docker
+#   2. Creates /etc/docker/daemon.json with data-root: /mnt/storage/docker
+#   3. Rsyncs existing /var/lib/docker to /mnt/storage/docker
+#   4. Starts Docker
+#   5. Verifies the new data root is active
+#
+# NOTE: This does NOT delete /var/lib/docker. After verifying everything works,
+# manually run: sudo rm -rf /var/lib/docker
+
+- name: Move Docker data root to /mnt/storage
+  hosts: gpu_hosts
+  become: true
+  vars:
+    docker_data_root: /mnt/storage/docker
+
+  tasks:
+    - name: Verify /mnt/storage is mounted
+      ansible.builtin.command: mountpoint -q /mnt/storage
+      changed_when: false
+
+    - name: Check if Docker is already using new data root
+      ansible.builtin.command: docker info --format '{{ "{{" }} .DockerRootDir {{ "}}" }}'
+      register: current_root
+      changed_when: false
+
+    - name: Skip if already migrated
+      when: current_root.stdout == docker_data_root
+      block:
+        - name: Already using new data root
+          ansible.builtin.debug:
+            msg: "Docker already using {{ docker_data_root }}, nothing to do"
+
+        - name: End play for this host
+          ansible.builtin.meta: end_host
+
+    - name: Create daemon.json
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "data-root": "{{ docker_data_root }}"
+          }
+        mode: '0644'
+        backup: true
+
+    - name: Stop Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: stopped
+
+    - name: Stop containerd (if managed by Docker)
+      ansible.builtin.systemd:
+        name: containerd
+        state: stopped
+      failed_when: false
+
+    - name: Create target directory
+      ansible.builtin.file:
+        path: "{{ docker_data_root }}"
+        state: directory
+        mode: '0711'
+
+    - name: Rsync existing Docker data to new location
+      ansible.builtin.command:
+        cmd: rsync -aHAXx /var/lib/docker/ {{ docker_data_root }}/
+      register: rsync_result
+      changed_when: rsync_result.rc == 0
+
+    - name: Start Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+
+    - name: Verify new data root
+      ansible.builtin.command: docker info --format '{{ "{{" }} .DockerRootDir {{ "}}" }}'
+      register: new_root
+      changed_when: false
+      failed_when: new_root.stdout != docker_data_root
+
+    - name: Verify Docker is functional
+      ansible.builtin.command: docker ps
+      changed_when: false
+
+    - name: Migration complete
+      ansible.builtin.debug:
+        msg: |
+          Docker data root migrated to {{ docker_data_root }}.
+          Old data at /var/lib/docker is still present — remove it manually after verifying:
+            sudo rm -rf /var/lib/docker
