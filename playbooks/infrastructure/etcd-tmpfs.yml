@@ -36,7 +36,7 @@
     etcd_data_dir: /var/lib/rancher/k3s/server/db
     etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
-    tmpfs_size: "512M"
+    tmpfs_size: "1G"
     etcd_version: "v3.5.21"
     etcdctl_path: /tmp/etcdctl
     etcd_certs: >-

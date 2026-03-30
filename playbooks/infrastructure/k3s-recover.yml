@@ -41,7 +41,7 @@
     etcd_data_dir: /var/lib/rancher/k3s/server/db
     etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
-    tmpfs_size: "512M"
+    tmpfs_size: "1G"
 
     # Cluster networking (must match existing cluster)
     cluster_cidr: "10.42.0.0/16"
@@ -100,6 +100,13 @@
       register: fstab_state
       changed_when: false
 
+    - name: Check current tmpfs size
+      shell: >-
+        df --output=size -BM {{ etcd_mount_dir }} 2>/dev/null | tail -1 | tr -d ' M'
+      register: current_tmpfs_size_mb
+      changed_when: false
+      when: tmpfs_state.stdout == "mounted"
+
     - name: Check if etcd data exists on tmpfs
       shell: ls {{ etcd_mount_dir }}/member/snap/db 2>/dev/null && echo "has_data" || echo "empty"
       register: etcd_data_state
@@ -148,6 +155,7 @@
           config exists:      {{ k3s_config_exists.stat.exists }}
           tmpfs in fstab:     {{ fstab_state.stdout }}
           tmpfs mounted:      {{ tmpfs_state.stdout }}
+          tmpfs size:         {{ current_tmpfs_size_mb.stdout | default('N/A') }}M (want {{ tmpfs_size }})
           etcd has data:      {{ etcd_data_state.stdout }}
           etcd-tmp exists:    {{ etcd_tmp_exists.stat.exists }}
           latest snapshot:    {{ latest_snapshot.stdout | default('NONE') }}
@@ -160,6 +168,7 @@
         needs_config: "{{ not k3s_config_exists.stat.exists }}"
         needs_tmpfs_fstab: "{{ fstab_state.stdout == 'not_in_fstab' }}"
         needs_tmpfs_mount: "{{ tmpfs_state.stdout == 'not_mounted' }}"
+        needs_tmpfs_resize: "{{ tmpfs_state.stdout == 'mounted' and (current_tmpfs_size_mb.stdout | default('0') | int) < 1024 }}"
         needs_token_fix: "{{ token_mismatch_count.stdout | int > 0 }}"
         needs_etcd_tmp_cleanup: "{{ etcd_tmp_exists.stat.exists }}"
         needs_restart: false
@@ -217,15 +226,14 @@
       register: server_line_added
       when: is_first_controller | bool and k3s_config_exists.stat.exists
 
-    # --- Ensure tmpfs is set up ---
+    # --- Ensure tmpfs is set up and correctly sized ---
 
-    - name: Add tmpfs entry to fstab
+    - name: Update fstab tmpfs entry
       lineinfile:
         path: /etc/fstab
         regexp: '^\s*tmpfs\s+{{ etcd_mount_dir }}'
         line: "tmpfs {{ etcd_mount_dir }} tmpfs nodev,nosuid,size={{ tmpfs_size }} 0 0"
         state: present
-      when: needs_tmpfs_fstab | bool
 
     - name: Create etcd mount point if missing
       file:
@@ -236,7 +244,7 @@
         mode: "0700"
       when: needs_tmpfs_mount | bool
 
-    - name: Mount tmpfs
+    - name: Mount tmpfs (new mount)
       mount:
         path: "{{ etcd_mount_dir }}"
         src: tmpfs
@@ -245,14 +253,29 @@
         state: mounted
       when: needs_tmpfs_mount | bool
 
+    # Resize tmpfs live if it's too small (remount preserves data)
+    - name: Resize tmpfs to {{ tmpfs_size }}
+      shell: mount -o remount,size={{ tmpfs_size }} {{ etcd_mount_dir }}
+      register: tmpfs_resized
+      when: needs_tmpfs_resize | bool
+
+    - name: Show tmpfs resize result
+      debug:
+        msg: "Resized tmpfs from {{ current_tmpfs_size_mb.stdout }}M to {{ tmpfs_size }}"
+      when: tmpfs_resized is changed
+
     # =============================================
     # PHASE 2: Fix token mismatch (requires restart)
     # =============================================
 
-    - name: Mark restart needed if token was fixed
+    - name: Mark restart needed if fixes were applied
       set_fact:
         needs_restart: true
-      when: token_fixed is changed or config_rendered is changed or server_line_added is changed
+      when: >-
+        token_fixed is changed or
+        config_rendered is changed or
+        server_line_added is changed or
+        tmpfs_resized is changed
 
     # Clean up etcd-tmp (created by failed reconciliation attempts)
     - name: Stop k3s before cleanup (if restarting)
