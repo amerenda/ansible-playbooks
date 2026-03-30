@@ -27,22 +27,21 @@
       changed_when: false
       become: true
 
-    - name: Count not-ready nodes
+    - name: Find not-ready nodes
       ansible.builtin.set_fact:
-        not_ready_nodes: >-
-          {{ (node_status.stdout | from_json).items
-             | selectattr('status.conditions', 'defined')
-             | map(attribute='metadata.name')
-             | zip(
-                 (node_status.stdout | from_json).items
-                 | map(attribute='status.conditions')
-               )
-             | selectattr('1', 'search', '"Ready"')
-             | list
-             | length }}
         not_ready_list: >-
-          {{ (node_status.stdout | from_json).items
-             | json_query('[?status.conditions[?type==`Ready` && status!=`True`]].metadata.name') }}
+          {% set ns = namespace(bad=[]) %}
+          {% for node in (node_status.stdout | from_json)['items'] %}
+          {%   set ready = 'Unknown' %}
+          {%   for cond in node.status.conditions | default([]) %}
+          {%     if cond.type == 'Ready' %}{% set ready = cond.status %}{% endif %}
+          {%   endfor %}
+          {%   if ready != 'True' %}
+          {%     set ns.bad = ns.bad + [node.metadata.name] %}
+          {%   endif %}
+          {% endfor %}
+          {{ ns.bad }}
+        total_nodes: "{{ (node_status.stdout | from_json)['items'] | length }}"
 
     - name: "ABORT: Node(s) already NotReady"
       ansible.builtin.fail:
@@ -71,4 +70,4 @@
 
     - name: Health check passed
       ansible.builtin.debug:
-        msg: "All {{ (node_status.stdout | from_json).items | length }} nodes Ready. Proceeding with: {{ health_check_context | default('operation') }}"
+        msg: "All {{ total_nodes }} nodes Ready. Proceeding with: {{ health_check_context | default('operation') }}"

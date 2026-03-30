@@ -41,14 +41,18 @@
     - name: Parse node readiness
       ansible.builtin.set_fact:
         node_ready_map: >-
-          {{ dict(
-               (node_json.stdout | from_json)['items']
-               | map(attribute='metadata.name')
-               | zip(
-                   (node_json.stdout | from_json)['items']
-                   | json_query('[].status.conditions[?type==`Ready`].status | [0]')
-                 )
-             ) }}
+          {% set ns = namespace(result={}) %}
+          {% for node in (node_json.stdout | from_json)['items'] %}
+          {%   set name = node.metadata.name %}
+          {%   set ready = 'Unknown' %}
+          {%   for cond in node.status.conditions %}
+          {%     if cond.type == 'Ready' %}
+          {%       set ready = cond.status %}
+          {%     endif %}
+          {%   endfor %}
+          {%   set ns.result = ns.result | combine({name: ready}) %}
+          {% endfor %}
+          {{ ns.result }}
 
     - name: "CHECK: All expected nodes are Ready"
       ansible.builtin.assert:

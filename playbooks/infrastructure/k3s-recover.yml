@@ -240,18 +240,15 @@
       ansible.builtin.debug:
         msg: >-
           Cluster nodes:
-          {{ (recovery_node_status.stdout | default('{}') | from_json).items
-             | default([])
-             | map(attribute='metadata.name')
-             | zip(
-                 (recovery_node_status.stdout | default('{}') | from_json).items
-                 | default([])
-                 | json_query('[].status.conditions[?type==`Ready`].status | [0]')
-               )
-             | map('join', '=')
-             | list
-             | join(', ')
-             | default('unable to query cluster') }}
+          {% set nodes = (recovery_node_status.stdout | default('{"items":[]}') | from_json)['items'] | default([]) %}
+          {% for node in nodes %}
+          {%   set ready = 'Unknown' %}
+          {%   for cond in node.status.conditions | default([]) %}
+          {%     if cond.type == 'Ready' %}{% set ready = cond.status %}{% endif %}
+          {%   endfor %}
+          {{ node.metadata.name }}={{ ready }}{{ ', ' if not loop.last else '' }}
+          {%- endfor %}
+          {{ 'unable to query cluster' if nodes | length == 0 else '' }}
       when: recovery_node_status.rc | default(1) == 0
 
     # --- Summarize state ---
