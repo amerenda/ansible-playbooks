@@ -12,9 +12,10 @@
 #   2. k3s API server responds
 #   3. etcd health (on controllers)
 #   4. tmpfs mounted for etcd (on controllers)
-#   5. Longhorn manager pods running
-#   6. ArgoCD server pod running and apps synced
-#   7. Expected node labels and taints present
+#   5. Boot recovery chain (recovery service enabled, script present, k3s depends on it, snapshots exist)
+#   6. Longhorn manager pods running
+#   7. ArgoCD server pod running and apps synced
+#   8. Expected node labels and taints present
 
 - name: Cluster smoke test
   hosts: "{{ groups['controllers'][0] }}"
@@ -108,7 +109,89 @@
         msg: "tmpfs mounted on {{ expected_controllers | join(', ') }}"
 
     # =============================================
-    # 5. Longhorn
+    # 5. Boot recovery chain (etcd auto-recovery)
+    # =============================================
+
+    - name: "CHECK: k3s-etcd-recovery.service exists and is enabled"
+      ansible.builtin.command: systemctl is-enabled k3s-etcd-recovery
+      delegate_to: "{{ item }}"
+      register: recovery_svc_enabled
+      changed_when: false
+      failed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have recovery service enabled"
+      ansible.builtin.assert:
+        that:
+          - item.stdout == 'enabled'
+        fail_msg: "k3s-etcd-recovery.service is NOT enabled on {{ item.item }} (status: {{ item.stdout | default('missing') }})"
+        quiet: true
+      loop: "{{ recovery_svc_enabled.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: Recovery script exists at /usr/local/bin/k3s-etcd-recovery.sh"
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-etcd-recovery.sh
+      delegate_to: "{{ item }}"
+      register: recovery_script
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have recovery script"
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.executable
+        fail_msg: "Recovery script missing or not executable on {{ item.item }}"
+        quiet: true
+      loop: "{{ recovery_script.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: k3s.service depends on recovery service"
+      ansible.builtin.command: systemctl show k3s -p After
+      delegate_to: "{{ item }}"
+      register: k3s_after_deps
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: k3s.service After= includes k3s-etcd-recovery.service"
+      ansible.builtin.assert:
+        that:
+          - "'k3s-etcd-recovery.service' in item.stdout"
+        fail_msg: "k3s.service on {{ item.item }} does not depend on k3s-etcd-recovery.service (After={{ item.stdout }})"
+        quiet: true
+      loop: "{{ k3s_after_deps.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: etcd snapshots exist (needed for recovery)"
+      ansible.builtin.shell: ls -1 /var/lib/rancher/k3s/server/db/snapshots/etcd-snapshot-* 2>/dev/null | wc -l
+      delegate_to: "{{ item }}"
+      register: snapshot_count
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have at least one snapshot"
+      ansible.builtin.assert:
+        that:
+          - item.stdout | int > 0
+        fail_msg: "No etcd snapshots on {{ item.item }} — recovery from full power loss would fail!"
+        quiet: true
+      loop: "{{ snapshot_count.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "PASS: Boot recovery chain"
+      ansible.builtin.debug:
+        msg: >-
+          All {{ expected_controllers | length }} controllers have:
+          recovery service enabled, script executable,
+          k3s depends on recovery, snapshots present
+          ({{ snapshot_count.results | map(attribute='stdout') | map('int') | list | join(', ') }} snapshots)
+
+    # =============================================
+    # 6. Longhorn
     # =============================================
 
     - name: "CHECK: Longhorn manager pods"
@@ -132,7 +215,7 @@
         msg: "Longhorn manager pod status: {{ longhorn_pods.stdout | default('not installed') }}"
 
     # =============================================
-    # 6. ArgoCD
+    # 7. ArgoCD
     # =============================================
 
     - name: "CHECK: ArgoCD server pod"
@@ -166,7 +249,7 @@
           App sync: {{ argocd_apps.stdout | default('no apps') }}
 
     # =============================================
-    # 7. Node labels and taints
+    # 8. Node labels and taints
     # =============================================
 
     - name: "CHECK: Storage node labels"
@@ -201,6 +284,7 @@
           Nodes:     {{ all_k3s_nodes | length }} Ready ({{ expected_controllers | length }} controllers, {{ expected_agents | length }} agents)
           API:       Healthy on all controllers
           etcd:      Healthy, tmpfs mounted
+          Recovery:  Enabled on all controllers ({{ snapshot_count.results | map(attribute='stdout') | map('int') | sum }} total snapshots)
           Longhorn:  {{ 'Running' if 'Running' in (longhorn_pods.stdout | default('')) else 'Not detected' }}
           ArgoCD:    {{ 'Running' if 'Running' in (argocd_pods.stdout | default('')) else 'Not detected' }}
           ============================================
