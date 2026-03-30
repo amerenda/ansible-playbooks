@@ -62,9 +62,10 @@
     peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
     peer_ip: "{{ hostvars[peer_node]['ansible_host'] }}"
 
-    # Designated restore node for full power loss (most RAM = best candidate)
-    # Only this node restores from snapshot. Others wait for it.
-    restore_node: "rpi5-1"
+    # Priority order for snapshot restore on full power loss.
+    # First node in the list that's booting performs the restore.
+    # Others wait. If a higher-priority node is down, the next takes over.
+    restore_priority: ["rpi5-1", "rpi5-0", "rpi4-0"]
 
   pre_tasks:
     - name: Validate k3s_token is provided

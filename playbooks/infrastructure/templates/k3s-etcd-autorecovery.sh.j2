@@ -2,12 +2,13 @@
 # k3s etcd auto-recovery on boot
 # Runs before k3s.service. Handles:
 #   - Empty tmpfs after reboot (normal: peers available, do nothing)
-#   - Full power loss (no peers: one node restores, others wait)
+#   - Full power loss (no peers: priority-based restore from snapshot)
 #
-# LEADER ELECTION: Only the designated restore node ({{ restore_node }})
-# performs snapshot restore. Other nodes wait up to 3 minutes for a peer
-# to come up. This prevents all nodes from restoring simultaneously and
-# creating independent clusters.
+# RESTORE PRIORITY: {{ restore_priority | join(' > ') }}
+# Each node waits for higher-priority nodes to restore first.
+# If a higher-priority node is down, the next one takes over.
+#
+# This node: {{ inventory_hostname }} (priority {{ restore_priority.index(inventory_hostname) + 1 }} of {{ restore_priority | length }})
 #
 # Managed by ansible — do not edit manually.
 
@@ -18,8 +19,7 @@ ETCD_DATA_DIR="{{ etcd_data_dir }}"
 SNAPSHOT_DIR="{{ snapshot_dir }}"
 CONFIG="/etc/rancher/k3s/config.yaml"
 LOG_TAG="k3s-etcd-recovery"
-IS_RESTORE_NODE={{ 'true' if inventory_hostname == restore_node else 'false' }}
-RESTORE_NODE_IP="{{ hostvars[restore_node]['ansible_host'] }}"
+MY_PRIORITY={{ restore_priority.index(inventory_hostname) }}
 
 log() { logger -t "$LOG_TAG" "$1"; echo "$1"; }
 
@@ -46,11 +46,18 @@ check_peers() {
     local PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
     for peer in "${PEERS[@]}"; do
         if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
-            log "Peer $peer is up — k3s will rejoin from peers"
+            log "Peer $peer is up — k3s will rejoin"
             return 0
         fi
     done
     return 1
+}
+
+# Check if a specific host is reachable (TCP port 22 — is it booting?)
+check_host_alive() {
+    local host=$1
+    curl -sk --connect-timeout 2 "https://${host}:6443/healthz" >/dev/null 2>&1 || \
+    timeout 2 bash -c "echo >/dev/tcp/${host}/22" 2>/dev/null
 }
 
 if check_peers; then
@@ -60,23 +67,48 @@ fi
 
 # --- No peers reachable — full power loss ---
 
-if [ "$IS_RESTORE_NODE" = false ]; then
-    # Non-restore nodes: wait for the restore node to come up
-    log "No peers up. This is NOT the restore node — waiting for {{ restore_node }} ($RESTORE_NODE_IP)"
-    for i in $(seq 1 36); do
+log "No peers reachable — full power loss detected"
+
+# Priority-based leader election:
+# Wait for higher-priority nodes. If they're alive (SSH reachable)
+# but k3s isn't up yet, they're probably restoring — keep waiting.
+# If they're not reachable at all, they're down — skip them.
+
+{% for node in restore_priority %}
+{% if node != inventory_hostname %}
+{% set node_ip = hostvars[node]['ansible_host'] %}
+# Priority {{ loop.index0 }}: {{ node }} ({{ node_ip }})
+{% if restore_priority.index(inventory_hostname) > loop.index0 %}
+WAIT_ROUNDS=0
+MAX_WAIT=36  # 36 * 5s = 3 minutes per higher-priority node
+log "Checking higher-priority node {{ node }} ({{ node_ip }})..."
+while [ $WAIT_ROUNDS -lt $MAX_WAIT ]; do
+    if check_peers; then
+        log "A peer came up — k3s will rejoin"
+        exit 0
+    fi
+    if check_host_alive "{{ node_ip }}"; then
+        log "{{ node }} is alive but k3s not ready — waiting (${WAIT_ROUNDS}/${MAX_WAIT})"
         sleep 5
-        if check_peers; then
-            log "Peer came up after $((i * 5))s — k3s will rejoin"
-            exit 0
-        fi
-    done
-    log "WARNING: Waited 3 minutes, no peers up. Letting k3s attempt startup anyway."
+        WAIT_ROUNDS=$((WAIT_ROUNDS + 1))
+    else
+        log "{{ node }} is not reachable — skipping (may be down)"
+        break
+    fi
+done
+{% endif %}
+{% endif %}
+{% endfor %}
+
+# If we get here, check peers one more time
+if check_peers; then
+    log "Peer came up during wait — k3s will rejoin"
     exit 0
 fi
 
-# --- This IS the restore node ---
+# --- This node is taking over the restore ---
 
-log "No peers reachable — full power loss detected. This is the restore node."
+log "All higher-priority nodes are down or timed out. Restoring from snapshot."
 
 # Find latest snapshot
 LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)
@@ -114,4 +146,4 @@ rm -rf /tmp/etcd-restored
 rm -rf "${ETCD_MOUNT}-old-"* 2>/dev/null || true
 rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
 
-log "Snapshot restore complete — k3s will start as single-node, peers will rejoin"
+log "Snapshot restore complete — k3s will start, other nodes will rejoin"
