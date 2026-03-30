@@ -1,0 +1,16 @@
+[Unit]
+Description=k3s etcd auto-recovery from snapshot
+Documentation=https://github.com/amerenda/ansible-playbooks
+Before=k3s.service
+After=local-fs.target network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/k3s
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/k3s-etcd-recovery.sh
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

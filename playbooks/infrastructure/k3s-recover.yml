@@ -338,7 +338,38 @@
         - k3s_config_exists.stat.exists or (config_rendered is changed)
 
     # =============================================
-    # PHASE 4: Verify
+    # PHASE 4: Deploy auto-recovery (survives full power loss)
+    # =============================================
+
+    # Systemd unit + script that runs before k3s on every boot.
+    # If tmpfs is empty and no peers are reachable, restores from
+    # the latest snapshot automatically. No manual intervention.
+
+    - name: Deploy auto-recovery script
+      template:
+        src: templates/k3s-etcd-autorecovery.sh.j2
+        dest: /usr/local/bin/k3s-etcd-recovery.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy auto-recovery systemd unit
+      template:
+        src: templates/k3s-etcd-recovery.service.j2
+        dest: /etc/systemd/system/k3s-etcd-recovery.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: recovery_unit
+
+    - name: Enable auto-recovery service
+      systemd:
+        name: k3s-etcd-recovery
+        enabled: yes
+        daemon_reload: "{{ recovery_unit is changed }}"
+
+    # =============================================
+    # PHASE 5: Verify
     # =============================================
 
     - name: Wait for k3s API to respond
@@ -361,5 +392,6 @@
           API health: {{ api_health.status | default('skipped') }}
           Config rendered: {{ config_rendered is changed | default(false) }}
           Token fixed: {{ token_fixed is changed | default(false) }}
+          tmpfs resized: {{ tmpfs_resized is changed | default(false) }}
           Restarted: {{ needs_restart }}
-          tmpfs mounted: {{ tmpfs_state.stdout }}
+          Auto-recovery: enabled

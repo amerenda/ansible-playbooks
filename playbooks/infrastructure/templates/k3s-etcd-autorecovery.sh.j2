@@ -1,0 +1,90 @@
+#!/bin/bash
+# k3s etcd auto-recovery on boot
+# Runs before k3s.service. Handles:
+#   - Empty tmpfs after reboot (normal: peers available, do nothing)
+#   - Full power loss (no peers: restore from latest snapshot)
+#
+# Managed by ansible — do not edit manually.
+
+set -euo pipefail
+
+ETCD_MOUNT="{{ etcd_mount_dir }}"
+ETCD_DATA_DIR="{{ etcd_data_dir }}"
+SNAPSHOT_DIR="{{ snapshot_dir }}"
+CONFIG="/etc/rancher/k3s/config.yaml"
+LOG_TAG="k3s-etcd-recovery"
+
+log() { logger -t "$LOG_TAG" "$1"; echo "$1"; }
+
+# Ensure tmpfs is mounted
+if ! mountpoint -q "$ETCD_MOUNT"; then
+    log "Mounting tmpfs at $ETCD_MOUNT"
+    mount "$ETCD_MOUNT"
+fi
+
+# If etcd data already exists, nothing to do
+if [ -d "$ETCD_MOUNT/member" ]; then
+    log "etcd data exists on tmpfs — no recovery needed"
+    exit 0
+fi
+
+log "tmpfs is empty — checking if peers are available"
+
+# Check if any peer controller is reachable on port 6443
+PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
+PEER_UP=false
+for peer in "${PEERS[@]}"; do
+    if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
+        log "Peer $peer is up — k3s will rejoin from peers"
+        PEER_UP=true
+        break
+    fi
+done
+
+if [ "$PEER_UP" = true ]; then
+    # Clean up any stale state that would prevent rejoin
+    rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
+    rm -f "${ETCD_DATA_DIR}/state.db" "${ETCD_DATA_DIR}/state.db-wal" "${ETCD_DATA_DIR}/state.db-shm" 2>/dev/null || true
+    log "Cleaned up stale state — k3s will handle rejoin"
+    exit 0
+fi
+
+log "No peers reachable — full power loss detected, restoring from snapshot"
+
+# Find latest snapshot
+LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)
+
+if [ -z "$LATEST" ]; then
+    log "ERROR: No snapshots found in $SNAPSHOT_DIR — cannot recover"
+    exit 1
+fi
+
+log "Restoring from snapshot: $LATEST"
+
+# Unmount tmpfs (cluster-reset renames the etcd dir, fails on mounted tmpfs)
+umount "$ETCD_MOUNT" 2>/dev/null || true
+
+# Comment out server: line (cluster-reset refuses with it set)
+if grep -q '^server:' "$CONFIG"; then
+    sed -i 's/^server:/#AUTORECOVERY#server:/' "$CONFIG"
+fi
+
+# Run cluster-reset
+k3s server --cluster-reset --cluster-reset-restore-path="$LATEST"
+
+# Re-enable server: line
+if grep -q '^#AUTORECOVERY#server:' "$CONFIG"; then
+    sed -i 's/^#AUTORECOVERY#server:/server:/' "$CONFIG"
+fi
+
+# Copy restored data into re-mounted tmpfs
+cp -a "$ETCD_MOUNT" /tmp/etcd-restored
+mount "$ETCD_MOUNT"
+cp -a /tmp/etcd-restored/. "$ETCD_MOUNT/"
+rm -rf /tmp/etcd-restored
+
+# Clean up old etcd dirs left by cluster-reset
+rm -rf "${ETCD_MOUNT}-old-"* 2>/dev/null || true
+rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
+
+log "Snapshot restore complete — k3s will start as single-node, peers will rejoin"
