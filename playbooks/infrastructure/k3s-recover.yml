@@ -7,25 +7,27 @@
 #   - Empty tmpfs after reboot (etcd rejoins from peers)
 #   - Full cluster power loss (restores from snapshot)
 #   - Stale etcd-tmp directories from failed reconciliation
+#   - Undersized tmpfs (live resize)
 #
 # This playbook is SAFE to run on a healthy cluster — it will detect
-# that everything is fine and make no changes.
+# that everything is fine and make no changes (unless force flags are set).
 #
 # Usage:
-#   # Recover the whole cluster:
+#   # Normal recovery (detect and fix issues):
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
 #     -e k3s_token=<TOKEN>
 #
-#   # Recover a single node:
+#   # Force snapshot restore (nuclear option — wipes etcd, restores from snapshot):
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<TOKEN> --limit rpi5-1
+#     -e k3s_token=<NEW_TOKEN> -e force_restore=true --limit rpi5-1
+#   # Then run without force_restore on the other nodes to rejoin.
 #
-# The k3s_token MUST be the password that matches the bootstrap data encryption.
-# Get it from a working node: sudo cat /var/lib/rancher/k3s/server/token
-# Use just the password portion (after "::server:").
+#   # Rotate token (live, on a running cluster):
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
+#     -e k3s_token=<NEW_TOKEN> -e rotate_token=true
 #
-# IMPORTANT: This playbook does NOT reboot or restart healthy nodes.
-# It only restarts k3s on nodes that need fixing.
+# The k3s_token should be just the password (not the full K10... format).
+# After rotate_token, update BWS with the new value.
 
 - name: Recover k3s cluster
   hosts: controllers
@@ -62,10 +64,12 @@
     peer_node: "{{ groups['controllers'] | difference([inventory_hostname]) | first }}"
     peer_ip: "{{ hostvars[peer_node]['ansible_host'] }}"
 
-    # Priority order for snapshot restore on full power loss.
-    # First node in the list that's booting performs the restore.
-    # Others wait. If a higher-priority node is down, the next takes over.
+    # Priority order for snapshot restore on full power loss
     restore_priority: ["rpi5-1", "rpi5-0", "rpi4-0"]
+
+    # Flags (pass via -e)
+    force_restore: "{{ force_restore | default(false) | bool }}"
+    rotate_token: "{{ rotate_token | default(false) | bool }}"
 
   pre_tasks:
     - name: Validate k3s_token is provided
@@ -77,6 +81,16 @@
           Get it from a working node:
             ssh <node> sudo cat /var/lib/rancher/k3s/server/token
           Use just the password after "::server:"
+
+    - name: Validate force_restore is used with --limit
+      assert:
+        that: ansible_play_hosts | length == 1
+        fail_msg: |
+          force_restore=true must be used with --limit to target ONE node.
+          That node restores from snapshot, then run without force_restore
+          on the others so they rejoin.
+          Example: --limit rpi5-1 -e force_restore=true
+      when: force_restore | bool
 
     # --- Detect current state ---
 
@@ -90,9 +104,17 @@
         path: "{{ k3s_config_path }}"
       register: k3s_config_exists
 
-    - name: Check if k3s is running
-      shell: systemctl is-active k3s 2>/dev/null || echo "inactive"
+    - name: Check if k3s is running and healthy
+      shell: >-
+        systemctl is-active k3s 2>/dev/null || echo "inactive"
       register: k3s_state
+      changed_when: false
+
+    - name: Check k3s API health
+      shell: >-
+        curl -sk --connect-timeout 3 -o /dev/null -w '%{http_code}'
+        https://{{ ansible_host }}:6443/healthz 2>/dev/null || echo "000"
+      register: k3s_api_status
       changed_when: false
 
     - name: Check if tmpfs is mounted
@@ -137,7 +159,7 @@
       failed_when: false
 
     - name: Read token from server token file (if exists)
-      shell: sudo cat {{ k3s_server_dir }}/token 2>/dev/null
+      shell: cat {{ k3s_server_dir }}/token 2>/dev/null
       register: server_token_file
       changed_when: false
       failed_when: false
@@ -157,6 +179,7 @@
           === {{ inventory_hostname }} ({{ ansible_host }}) ===
           k3s installed:      {{ k3s_binary.stat.exists }}
           k3s state:          {{ k3s_state.stdout }}
+          k3s API:            {{ k3s_api_status.stdout }}
           config exists:      {{ k3s_config_exists.stat.exists }}
           tmpfs in fstab:     {{ fstab_state.stdout }}
           tmpfs mounted:      {{ tmpfs_state.stdout }}
@@ -165,6 +188,9 @@
           etcd-tmp exists:    {{ etcd_tmp_exists.stat.exists }}
           latest snapshot:    {{ latest_snapshot.stdout | default('NONE') }}
           token mismatches:   {{ token_mismatch_count.stdout }}
+          --- flags ---
+          force_restore:      {{ force_restore }}
+          rotate_token:       {{ rotate_token }}
 
     # --- Determine what needs fixing ---
 
@@ -179,6 +205,32 @@
         needs_restart: false
 
   tasks:
+    # =============================================
+    # PHASE 0: Token rotation (live, on running cluster)
+    # =============================================
+
+    - name: Rotate cluster token
+      shell: >-
+        k3s token rotate --new-token '{{ k3s_token }}'
+      register: token_rotated
+      when:
+        - rotate_token | bool
+        - k3s_state.stdout == 'active'
+        - inventory_hostname == ansible_play_hosts[0]
+      no_log: true
+
+    - name: Show token rotation result
+      debug:
+        msg: "Token rotated on {{ inventory_hostname }}. All nodes will be updated."
+      when: token_rotated is changed
+
+    # After rotation, update config + token file + restart on ALL nodes
+    # (serial: 1 means this happens one node at a time)
+    - name: Mark restart needed for token rotation
+      set_fact:
+        needs_restart: true
+      when: rotate_token | bool
+
     # =============================================
     # PHASE 1: Fix config and tmpfs (always safe)
     # =============================================
@@ -197,7 +249,7 @@
       register: config_rendered
       when: needs_config | bool
 
-    # For existing configs, just fix the token if it's wrong
+    # For existing configs, fix the token if it doesn't match
     - name: Extract password from provided token
       set_fact:
         token_password: "{{ k3s_token.split('::server:')[-1] if '::server:' in k3s_token else k3s_token }}"
@@ -270,17 +322,119 @@
       when: tmpfs_resized is changed
 
     # =============================================
-    # PHASE 2: Fix token mismatch (requires restart)
+    # PHASE 2: Force restore from snapshot
+    # =============================================
+
+    - name: Validate snapshot exists for force_restore
+      assert:
+        that: latest_snapshot.stdout | default('') | length > 0
+        fail_msg: "No snapshots found in {{ snapshot_dir }} — cannot restore"
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Stop k3s"
+      systemd:
+        name: k3s
+        state: stopped
+      when: force_restore | bool and k3s_state.stdout != 'inactive'
+
+    - name: "FORCE RESTORE: Unmount tmpfs"
+      shell: umount {{ etcd_mount_dir }} 2>/dev/null || true
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Clean etcd data on SD card"
+      shell: >-
+        rm -rf {{ etcd_mount_dir }}/* {{ etcd_mount_dir }}-old-*
+        {{ etcd_data_dir }}/etcd-tmp
+        {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Comment out server line for cluster-reset"
+      shell: sed -i 's/^server:/#FORCE_RESTORE#server:/' {{ k3s_config_path }}
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Restore from snapshot {{ latest_snapshot.stdout | default('') | basename }}"
+      shell: >-
+        k3s server --cluster-reset
+        --cluster-reset-restore-path={{ latest_snapshot.stdout }}
+      when: force_restore | bool
+      register: restore_result
+
+    - name: "FORCE RESTORE: Re-enable server line"
+      shell: sed -i 's/^#FORCE_RESTORE#server:/server:/' {{ k3s_config_path }}
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Copy restored data into tmpfs"
+      shell: |
+        cp -a {{ etcd_mount_dir }} /tmp/etcd-restored
+        mount {{ etcd_mount_dir }}
+        cp -a /tmp/etcd-restored/. {{ etcd_mount_dir }}/
+        rm -rf /tmp/etcd-restored
+        rm -rf {{ etcd_mount_dir }}-old-* {{ etcd_data_dir }}/etcd-tmp
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Update server token file"
+      copy:
+        content: "{{ k3s_token }}"
+        dest: "{{ k3s_server_dir }}/token"
+        owner: root
+        group: root
+        mode: "0600"
+      when: force_restore | bool
+      no_log: true
+
+    - name: "FORCE RESTORE: Start k3s"
+      systemd:
+        name: k3s
+        state: started
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Wait for API"
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: restore_api_health
+      until: restore_api_health.status in [200, 401]
+      retries: 60
+      delay: 10
+      when: force_restore | bool
+
+    - name: "FORCE RESTORE: Rotate token to match provided value"
+      shell: >-
+        k3s token rotate --new-token '{{ k3s_token }}'
+      when: force_restore | bool
+      no_log: true
+
+    - name: Show force restore result
+      debug:
+        msg: |
+          === FORCE RESTORE COMPLETE on {{ inventory_hostname }} ===
+          Restored from: {{ latest_snapshot.stdout | default('') | basename }}
+          API health: {{ restore_api_health.status | default('N/A') }}
+          Token set to provided value.
+          Now run this playbook WITHOUT force_restore on the other nodes.
+      when: force_restore | bool
+
+    # Skip remaining phases if force_restore was used
+    - name: End play after force restore
+      meta: end_host
+      when: force_restore | bool
+
+    # =============================================
+    # PHASE 3: Fix token mismatch (requires restart)
     # =============================================
 
     - name: Mark restart needed if fixes were applied
       set_fact:
         needs_restart: true
       when: >-
-        token_fixed is changed or
+        (not needs_restart | bool) and
+        (token_fixed is changed or
         config_rendered is changed or
         server_line_added is changed or
-        tmpfs_resized is changed
+        tmpfs_resized is changed)
 
     # Clean up etcd-tmp (created by failed reconciliation attempts)
     - name: Stop k3s before cleanup (if restarting)
@@ -305,7 +459,7 @@
         - "{{ etcd_data_dir }}/state.db-shm"
       when: needs_restart | bool
 
-    # Also update the server token file to match
+    # Update the server token file to match
     - name: Update server token file
       copy:
         content: "{{ k3s_token }}"
@@ -325,12 +479,8 @@
       when: needs_restart | bool
 
     # =============================================
-    # PHASE 3: Handle empty etcd on tmpfs (reboot recovery)
+    # PHASE 4: Handle stopped k3s (reboot recovery)
     # =============================================
-
-    # If tmpfs is mounted but empty, and k3s is running, it should
-    # rejoin from peers automatically. If k3s is not running (e.g.
-    # full power loss, no peers), we need to restore from snapshot.
 
     - name: Start k3s if not running (peer rejoin)
       systemd:
@@ -343,12 +493,8 @@
         - k3s_config_exists.stat.exists or (config_rendered is changed)
 
     # =============================================
-    # PHASE 4: Deploy auto-recovery (survives full power loss)
+    # PHASE 5: Deploy auto-recovery (survives full power loss)
     # =============================================
-
-    # Systemd unit + script that runs before k3s on every boot.
-    # If tmpfs is empty and no peers are reachable, restores from
-    # the latest snapshot automatically. No manual intervention.
 
     - name: Deploy auto-recovery script
       template:
@@ -394,7 +540,7 @@
         daemon_reload: "{{ recovery_unit is changed or k3s_dropin is changed }}"
 
     # =============================================
-    # PHASE 5: Verify
+    # PHASE 6: Verify
     # =============================================
 
     - name: Wait for k3s API to respond
@@ -414,9 +560,10 @@
       debug:
         msg: |
           === {{ inventory_hostname }} recovery complete ===
-          API health: {{ api_health.status | default('skipped') }}
-          Config rendered: {{ config_rendered is changed | default(false) }}
-          Token fixed: {{ token_fixed is changed | default(false) }}
-          tmpfs resized: {{ tmpfs_resized is changed | default(false) }}
-          Restarted: {{ needs_restart }}
-          Auto-recovery: enabled
+          API health:       {{ api_health.status | default('skipped') }}
+          Config rendered:  {{ config_rendered is changed | default(false) }}
+          Token fixed:      {{ token_fixed is changed | default(false) }}
+          Token rotated:    {{ token_rotated is changed | default(false) }}
+          tmpfs resized:    {{ tmpfs_resized is changed | default(false) }}
+          Restarted:        {{ needs_restart }}
+          Auto-recovery:    enabled
