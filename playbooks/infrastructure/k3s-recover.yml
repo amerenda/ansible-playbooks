@@ -50,8 +50,8 @@
     service_cidr: "10.43.0.0/16"
     cluster_dns: "10.43.0.10"
 
-    # etcd snapshot config
-    etcd_snapshot_schedule: "*/5 * * * *"
+    # etcd snapshot config (staggered per-node in template)
+    etcd_snapshot_interval: 5
     etcd_snapshot_retention: 12
     etcd_snapshot_compress: true
 

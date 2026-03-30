@@ -17,8 +17,14 @@ cluster_dns: "10.43.0.10"
 # etcd configuration
 etcd_data_dir: "/var/lib/rancher/k3s/server/db"
 etcd_snapshot_retention: 12
-etcd_snapshot_schedule: "*/5 * * * *"  # Every 5 minutes (etcd runs on tmpfs)
+etcd_snapshot_interval: 5  # minutes between snapshots per node
 etcd_snapshot_compress: true
+
+# Staggered snapshot schedule — each controller offsets by its index
+# in the controllers group, so snapshots are spread evenly across the
+# interval. With 3 controllers and a 5-minute interval, snapshots land
+# at :00/:01/:02, :05/:06/:07, etc. (~100s between cluster-wide snapshots).
+# Computed per-host in the config template.
 
 # Longhorn configuration
 longhorn_storage_class: "longhorn"
