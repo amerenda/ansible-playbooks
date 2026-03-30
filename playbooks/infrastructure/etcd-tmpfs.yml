@@ -167,32 +167,27 @@
           | tar xz --strip-components=1 -C /tmp "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
       when: tmpfs_check.stdout == "not_mounted"
 
-    - name: Find and remove stale etcd member for this node
+    - name: Get etcd member ID for this node
       delegate_to: "{{ peer_node }}"
-      shell: |
-        # Get member list, find the member with this node's IP in peer URLs
-        MEMBER_ID=$(ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
-          member list -w json | python3 -c "
-        import sys, json
-        data = json.load(sys.stdin)
-        for m in data.get('members', []):
-          for url in m.get('peerURLs', []):
-            if '{{ ansible_host }}' in url:
-              print(format(m['ID'], 'x'))
-              sys.exit(0)
-        ")
-        if [ -n "$MEMBER_ID" ]; then
-          echo "Removing stale member $MEMBER_ID ({{ inventory_hostname }})"
-          ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} member remove "$MEMBER_ID"
-        else
-          echo "No stale member found for {{ ansible_host }}"
-        fi
-      register: member_removal
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member list -w simple | grep '{{ ansible_host }}' | cut -d',' -f1 || true
+      register: stale_member_id
       when: tmpfs_check.stdout == "not_mounted"
+
+    - name: Remove stale etcd member for this node
+      delegate_to: "{{ peer_node }}"
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member remove {{ stale_member_id.stdout }}
+      register: member_removal
+      when:
+        - tmpfs_check.stdout == "not_mounted"
+        - stale_member_id.stdout | default('') | length > 0
 
     - name: Show member removal result
       debug:
-        msg: "{{ member_removal.stdout_lines | default(['skipped']) }}"
+        msg: "{{ member_removal.stdout | default('No stale member found — skipped') }}"
       when: tmpfs_check.stdout == "not_mounted"
 
     - name: Mount tmpfs at etcd data dir
