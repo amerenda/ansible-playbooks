@@ -34,25 +34,14 @@
     # =============================================
 
     - name: "CHECK: Get all node statuses"
-      ansible.builtin.command: kubectl get nodes -o json
-      register: node_json
+      ansible.builtin.shell: >-
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}'
+      register: node_ready_raw
       changed_when: false
 
-    - name: Parse node readiness
+    - name: Parse node readiness map
       ansible.builtin.set_fact:
-        node_ready_map: >-
-          {% set ns = namespace(result={}) %}
-          {% for node in (node_json.stdout | from_json)['items'] %}
-          {%   set name = node.metadata.name %}
-          {%   set ready = 'Unknown' %}
-          {%   for cond in node.status.conditions %}
-          {%     if cond.type == 'Ready' %}
-          {%       set ready = cond.status %}
-          {%     endif %}
-          {%   endfor %}
-          {%   set ns.result = ns.result | combine({name: ready}) %}
-          {% endfor %}
-          {{ ns.result }}
+        node_ready_map: "{{ dict(node_ready_raw.stdout_lines | select | map('split', '=')) }}"
 
     - name: "CHECK: All expected nodes are Ready"
       ansible.builtin.assert:
