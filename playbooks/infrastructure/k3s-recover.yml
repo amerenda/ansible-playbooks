@@ -12,22 +12,70 @@
 # This playbook is SAFE to run on a healthy cluster — it will detect
 # that everything is fine and make no changes (unless force flags are set).
 #
-# Usage:
-#   # Normal recovery (detect and fix issues):
+# Usage (preferred — fetch token from BWS):
+#   # Normal recovery:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<TOKEN>
+#     -e bws_access_token=<BWS_TOKEN>
 #
-#   # Force snapshot restore (nuclear option — wipes etcd, restores from snapshot):
+#   # Force snapshot restore:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<NEW_TOKEN> -e force_restore=true --limit rpi5-1
-#   # Then run without force_restore on the other nodes to rejoin.
+#     -e bws_access_token=<BWS_TOKEN> -e force_restore=true --limit rpi5-1
 #
-#   # Rotate token (live, on a running cluster):
+#   # Rotate token:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<NEW_TOKEN> -e rotate_token=true
+#     -e bws_access_token=<BWS_TOKEN> -e rotate_token=true
+#
+# Usage (transitional — direct token, will be removed):
+#   ansible-playbook ... -e k3s_token=<TOKEN>
 #
 # The k3s_token should be just the password (not the full K10... format).
-# After rotate_token, update BWS with the new value.
+#
+# Secrets: This playbook fetches k3s_token from BWS automatically when
+# bws_access_token is provided. Direct -e k3s_token is transitional.
+
+- name: Fetch secrets for recovery
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [k3s, etcd, recover]
+  tasks:
+    - name: Skip BWS fetch if no access token provided
+      ansible.builtin.debug:
+        msg: "No bws_access_token provided — expecting k3s_token via -e"
+      when: bws_access_token is not defined or bws_access_token == ""
+
+    - name: Fetch k3s_token from BWS
+      when:
+        - bws_access_token is defined
+        - bws_access_token | length > 0
+        - bws_secrets is defined
+        - bws_secrets.k3s_token | default('') | length > 0
+      block:
+        - name: Check if bws CLI is installed
+          ansible.builtin.stat:
+            path: /usr/local/bin/bws
+          register: bws_check
+
+        - name: Fail if bws CLI not installed
+          ansible.builtin.fail:
+            msg: |
+              bws CLI not installed. Run fetch-secrets.yml first, or install manually:
+                See playbooks/infrastructure/fetch-secrets.yml for install steps
+          when: not bws_check.stat.exists
+
+        - name: Fetch k3s_token from BWS
+          ansible.builtin.command: >-
+            /usr/local/bin/bws secret get {{ bws_secrets.k3s_token }}
+            --access-token {{ bws_access_token }}
+            --output json
+          register: bws_token_result
+          no_log: true
+          changed_when: false
+
+        - name: Set k3s_token from BWS
+          ansible.builtin.set_fact:
+            k3s_token: "{{ (bws_token_result.stdout | from_json).value }}"
+          no_log: true
 
 - name: Recover k3s cluster
   hosts: controllers
@@ -72,15 +120,21 @@
     rotate_token: "{{ rotate_token | default(false) | bool }}"
 
   pre_tasks:
-    - name: Validate k3s_token is provided
+    - name: Use k3s_token from BWS (fetched in previous play)
+      ansible.builtin.set_fact:
+        k3s_token: "{{ hostvars['localhost']['k3s_token'] }}"
+      when:
+        - k3s_token is not defined or k3s_token == ""
+        - hostvars['localhost']['k3s_token'] is defined
+      no_log: true
+
+    - name: Validate k3s_token is available
       assert:
         that: k3s_token is defined and k3s_token | length > 0
         fail_msg: |
-          k3s_token is required. Pass the token password:
-            -e k3s_token=<PASSWORD>
-          Get it from a working node:
-            ssh <node> sudo cat /var/lib/rancher/k3s/server/token
-          Use just the password after "::server:"
+          k3s_token is not set. Provide it via BWS (preferred) or directly:
+            -e bws_access_token=<TOKEN>  (fetches from BWS)
+            -e k3s_token=<PASSWORD>      (transitional, will be removed)
 
     - name: Validate force_restore is used with --limit
       assert:

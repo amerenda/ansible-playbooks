@@ -32,9 +32,9 @@ The only manual input is the BWS access token itself:
 ansible-playbook -i inventory/inventory.ini all.yml -e bws_access_token=<TOKEN>
 ```
 
-> **Status:** `fetch-secrets.yml` is not yet implemented. Some playbooks still accept
-> `k3s_token` directly as a transitional measure. This will be removed once BWS
-> integration is complete. See `group_vars/k3s.yml` for the secret inventory.
+> **Status:** `fetch-secrets.yml` is implemented. Some playbooks still accept
+> `k3s_token` directly as a fallback during transition. Direct token passing
+> will be removed once all BWS secret UUIDs are populated in `group_vars/k3s.yml`.
 
 ## Prerequisites
 
@@ -64,6 +64,7 @@ ansible-playbooks/
 │   │   ├── etcd-tmpfs.yml           Migrate etcd to tmpfs (RAM disk)
 │   │   ├── k3s-recover.yml          Cluster recovery (token rotation, snapshot restore)
 │   │   ├── enable-etcd-metrics.yml  Expose etcd metrics
+│   │   ├── fetch-secrets.yml         Fetch all secrets from BWS
 │   │   ├── docker-storage.yml       Move Docker data root to /mnt/storage
 │   │   ├── smoke-test.yml           End-to-end cluster health validation
 │   │   └── templates/               Jinja2 templates for config files

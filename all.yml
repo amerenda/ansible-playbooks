@@ -3,6 +3,10 @@
 # This playbook orchestrates the setup of the entire k3s cluster
 # Run with: ansible-playbook -i inventory/inventory.ini all.yml
 
+- name: Fetch secrets from Bitwarden Secrets Manager
+  import_playbook: playbooks/infrastructure/fetch-secrets.yml
+  tags: [secrets, bws]
+
 - name: Prepare Raspberry Pi Nodes (includes common setup)
   import_playbook: playbooks/infrastructure/setup-rpi.yml
   tags: [bootstrap, rpi, network, longhorn, common, dns, packages, iscsi]

@@ -63,14 +63,26 @@
       register: k3s_running
       ignore_errors: yes
 
-    - name: Set k3s token from environment variable
+    - name: Use k3s_token from BWS (fetched by fetch-secrets.yml)
+      ansible.builtin.set_fact:
+        k3s_token: "{{ hostvars['localhost']['fetched_secrets']['k3s_token'] }}"
+      when:
+        - hostvars['localhost']['fetched_secrets'] is defined
+        - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
+      no_log: true
+
+    - name: "FALLBACK: Set k3s token from environment variable"
       set_fact:
         k3s_token: "{{ ansible_env.K3S_TOKEN }}"
-      when: ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
+      when:
+        - k3s_token is not defined or k3s_token == ""
+        - ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
 
     - name: Validate k3s token is set (only required when replacing)
       fail:
-        msg: "k3s_token must be set when replace_cluster=true. Use -e k3s_token=your-token, set K3S_TOKEN env var, or set it in group_vars"
+        msg: |
+          k3s_token is not set. Preferred: run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
+          Fallback: -e k3s_token=<TOKEN> or K3S_TOKEN env var (transitional, will be removed)
       when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
 
     - name: Check if k3s token file exists on first controller
