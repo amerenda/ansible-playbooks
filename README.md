@@ -32,9 +32,13 @@ The only manual input is the BWS access token itself:
 ansible-playbook -i inventory/inventory.ini all.yml -e bws_access_token=<TOKEN>
 ```
 
-> **Status:** `fetch-secrets.yml` is implemented. Some playbooks still accept
-> `k3s_token` directly as a fallback during transition. Direct token passing
-> will be removed once all BWS secret UUIDs are populated in `group_vars/k3s.yml`.
+> **Status (2026-03-30):** `fetch-secrets.yml` implemented and wired into
+> `k3s-recover.yml`. BWS UUID for `k3s-dean-etcd-token` populated. The `bws`
+> CLI auto-installs on first run. Some playbooks still accept `k3s_token`
+> directly as a transitional fallback. Remaining: wire BWS into
+> `k3s-controller.yml`, `k3s-agent.yml`, and `post-k3s-setup.yml`. The
+> auto-recovery service (`k3s-etcd-recovery.service`) is written but not yet
+> deployed to any controller — run `k3s-recover.yml` to deploy it.
 
 ## Prerequisites
 
@@ -144,10 +148,11 @@ The 3-controller etcd cluster tolerates 1 node down. Losing 2 = quorum loss = cl
 
 ## High Availability
 
-- etcd runs on tmpfs (RAM disk) for performance, with snapshots every 5 minutes to SD card
+- etcd runs on tmpfs (1G RAM disk) for performance, with staggered snapshots to SD card
+- Staggered snapshots: each controller offsets by its inventory index (e.g. :00, :01, :02) so a snapshot exists somewhere in the cluster every ~100 seconds
 - Auto-recovery service (`k3s-etcd-recovery.service`) runs before k3s on every boot
 - On reboot: node rejoins from peers (no restore needed)
-- On full power loss: priority-based leader election restores from the most recent snapshot
+- On full power loss: priority-based leader election (rpi5-1 > rpi5-0 > rpi4-0) restores from the most recent snapshot automatically
 - The kubeconfig is configured with all controller endpoints for round-robin failover
 
 ## Notes
