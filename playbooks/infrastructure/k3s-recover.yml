@@ -183,9 +183,16 @@
       register: k3s_api_status
       changed_when: false
 
+    - name: Check k3s restart count
+      shell: systemctl show k3s --property=NRestarts --value 2>/dev/null || echo "0"
+      register: k3s_restart_count
+      changed_when: false
+
     - name: Detect crash-looping k3s
       set_fact:
-        k3s_crash_loop: "{{ k3s_state.stdout in ['activating', 'active'] and k3s_api_status.stdout == '000' }}"
+        k3s_crash_loop: >-
+          {{ k3s_state.stdout in ['activating', 'active'] and
+             (k3s_api_status.stdout == '000' or k3s_restart_count.stdout | int > 2) }}
 
     - name: Check if tmpfs is mounted
       shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
