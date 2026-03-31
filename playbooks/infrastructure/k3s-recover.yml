@@ -38,6 +38,8 @@
   connection: local
   gather_facts: true
   tags: [k3s, etcd, recover]
+  vars_files:
+    - ../../group_vars/k3s.yml
   tasks:
     - name: Skip BWS fetch if no access token provided
       ansible.builtin.debug:
