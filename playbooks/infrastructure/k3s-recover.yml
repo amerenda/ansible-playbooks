@@ -447,6 +447,24 @@
       register: etcdctl_install
       changed_when: "'already present' not in etcdctl_install.stdout"
 
+    - name: Install etcdctl on peer node
+      delegate_to: "{{ peer_node }}"
+      shell: |
+        if [ -x {{ etcdctl_path }} ]; then
+          echo "already present"
+          exit 0
+        fi
+        ARCH=$(uname -m)
+        case $ARCH in
+          aarch64) ARCH=arm64 ;;
+          x86_64) ARCH=amd64 ;;
+        esac
+        curl -sL "https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-${ARCH}.tar.gz" \
+          | tar xz --strip-components=1 -C /usr/local/bin "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
+        chmod 755 {{ etcdctl_path }}
+      register: etcdctl_peer_install
+      changed_when: "'already present' not in etcdctl_peer_install.stdout"
+
     # =============================================
     # PHASE 2: Force restore from snapshot
     # =============================================
