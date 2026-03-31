@@ -645,18 +645,26 @@
         - etcd_data_state.stdout == "empty"
         - k3s_crash_loop | bool or needs_restart | bool or k3s_state.stdout == 'inactive'
 
-    - name: Get stale etcd member IDs from peer (this node + orphaned learners)
+    - name: Get all etcd members from peer
       delegate_to: "{{ peer_node }}"
-      shell: |
-        # Find members matching this node's IP
-        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
-          member list -w simple 2>/dev/null | \
-          grep '{{ ansible_host }}' | cut -d',' -f1
-        # Find orphaned learner members (empty name from failed join attempts)
-        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
-          member list -w simple 2>/dev/null | \
-          awk -F', ' '$3 == "" {print $1}'
-      register: stale_member_ids
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member list -w simple 2>/dev/null || true
+      register: etcd_member_list_raw
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Extract stale member IDs (this node + orphaned learners)
+      set_fact:
+        stale_member_ids: >-
+          {{ (etcd_member_list_raw.stdout_lines | default([]))
+             | select('search', ansible_host)
+             | map('regex_replace', ',.*', '')
+             | list
+             +
+             (etcd_member_list_raw.stdout_lines | default([]))
+             | select('regex', '^[^,]+,\s*\w+,\s*,')
+             | map('regex_replace', ',.*', '')
+             | list }}
       when: etcd_data_state.stdout == "empty"
 
     - name: Remove stale etcd members from peer
@@ -664,17 +672,17 @@
       shell: >-
         ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
         member remove {{ item }}
-      loop: "{{ stale_member_ids.stdout_lines | default([]) }}"
+      loop: "{{ stale_member_ids | default([]) }}"
       when:
-        - stale_member_ids is not skipped
+        - stale_member_ids | default([]) | length > 0
         - item | length > 0
       register: member_removal
       failed_when: false
 
     - name: Show member removal results
       debug:
-        msg: "Removed etcd members from {{ peer_node }}: {{ stale_member_ids.stdout_lines | default([]) }}"
-      when: stale_member_ids.stdout_lines | default([]) | length > 0
+        msg: "Removed etcd members from {{ peer_node }}: {{ stale_member_ids | default([]) }}"
+      when: stale_member_ids | default([]) | length > 0
 
     - name: Wipe etcd data directory completely
       shell: rm -rf {{ etcd_mount_dir }}/*
