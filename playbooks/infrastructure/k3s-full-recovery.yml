@@ -58,6 +58,7 @@
           register: bws_which
           changed_when: false
           failed_when: false
+          check_mode: false
 
         - name: Fail if bws CLI not installed
           ansible.builtin.fail:
