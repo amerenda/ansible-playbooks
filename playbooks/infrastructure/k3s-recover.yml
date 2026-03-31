@@ -176,6 +176,10 @@
       register: k3s_state
       changed_when: false
 
+    - name: Detect crash-looping k3s (activating = systemd restarting)
+      set_fact:
+        k3s_crash_loop: "{{ k3s_state.stdout == 'activating' }}"
+
     - name: Check k3s API health
       shell: >-
         curl -sk --connect-timeout 3 -o /dev/null -w '%{http_code}'
@@ -603,6 +607,12 @@
 
     # Remove stale etcd member from peer before starting k3s
     # (needed after reboot: tmpfs wiped, but peer still has this node as member)
+    - name: Stop crash-looping k3s before member removal
+      systemd:
+        name: k3s
+        state: stopped
+      when: k3s_crash_loop | bool and etcd_data_state.stdout == "empty"
+
     - name: Get stale etcd member ID from peer
       delegate_to: "{{ peer_node }}"
       shell: >-
@@ -611,7 +621,7 @@
       register: stale_member_id
       when:
         - etcd_data_state.stdout == "empty"
-        - needs_restart | bool or k3s_state.stdout == 'inactive'
+        - needs_restart | bool or k3s_state.stdout == 'inactive' or k3s_crash_loop | bool
 
     - name: Remove stale etcd member from peer
       delegate_to: "{{ peer_node }}"
@@ -644,7 +654,7 @@
         name: k3s
         state: started
       when:
-        - k3s_state.stdout == 'inactive'
+        - k3s_state.stdout == 'inactive' or k3s_crash_loop | bool
         - not (needs_restart | bool)
         - k3s_binary.stat.exists
         - k3s_config_exists.stat.exists or (config_rendered is changed)
