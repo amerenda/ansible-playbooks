@@ -208,7 +208,7 @@
 
     - name: "CHECK: Longhorn manager pods"
       ansible.builtin.command: >-
-        kubectl get pods -n longhorn-system -l app=longhorn-manager
+        kubectl get pods -l app=longhorn-manager --all-namespaces
         -o jsonpath='{.items[*].status.phase}'
       register: longhorn_pods
       changed_when: false
