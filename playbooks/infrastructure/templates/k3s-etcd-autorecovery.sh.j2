@@ -22,6 +22,10 @@ SNAPSHOT_DIR="{{ snapshot_dir }}"
 CONFIG="/etc/rancher/k3s/config.yaml"
 LOG_TAG="k3s-etcd-recovery"
 PRIORITY_INDEX={{ restore_priority.index(inventory_hostname) }}
+ETCDCTL="{{ etcdctl_path }}"
+ETCD_CERTS="--endpoints=https://127.0.0.1:2379 --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt"
+NODE_IP="{{ ansible_host }}"
+PEER_IPS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
 
 log() { logger -t "$LOG_TAG" "$1"; echo "$1"; }
 
@@ -45,8 +49,7 @@ rm -f "${ETCD_DATA_DIR}/state.db" "${ETCD_DATA_DIR}/state.db-wal" "${ETCD_DATA_D
 
 # Check if any peer controller is reachable on port 6443 (k3s running)
 check_peers() {
-    local PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
-    for peer in "${PEERS[@]}"; do
+    for peer in "${PEER_IPS[@]}"; do
         if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
             log "Peer $peer is up — k3s will rejoin"
             return 0
@@ -62,8 +65,32 @@ check_host_alive() {
     timeout 2 bash -c "echo >/dev/tcp/${host}/22" 2>/dev/null
 }
 
+# Remove stale etcd member for this node from a peer
+# Without this, k3s fails with "duplicate node name found" on rejoin
+remove_stale_member() {
+    for peer in "${PEER_IPS[@]}"; do
+        local PEER_CERTS="--endpoints=https://${peer}:2379 --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt"
+        local MEMBER_ID
+        MEMBER_ID=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | grep "$NODE_IP" | cut -d',' -f1) || true
+        if [ -n "$MEMBER_ID" ]; then
+            log "Removing stale etcd member $MEMBER_ID (this node) from peer $peer"
+            if ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member remove "$MEMBER_ID" 2>&1; then
+                log "Stale member removed — k3s can rejoin"
+                return 0
+            else
+                log "WARNING: Failed to remove member from peer $peer"
+            fi
+        fi
+    done
+    return 1
+}
+
 if check_peers; then
-    log "Cleaned up stale state — k3s will handle rejoin"
+    if [ -x "$ETCDCTL" ]; then
+        remove_stale_member || log "WARNING: Could not remove stale member — k3s may fail to rejoin"
+    else
+        log "WARNING: etcdctl not found at $ETCDCTL — cannot remove stale member"
+    fi
     exit 0
 fi
 
@@ -73,8 +100,6 @@ log "No peers reachable — full power loss detected"
 
 # Wait for peers to become SSH-reachable (they're booting too).
 # If a peer's k3s comes up during the wait, rejoin immediately.
-PEER_IPS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
-
 for peer_ip in "${PEER_IPS[@]}"; do
     WAIT_ROUNDS=0
     MAX_WAIT=36  # 36 * 5s = 3 minutes per peer

@@ -96,6 +96,15 @@
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
     tmpfs_size: "1G"
 
+    # etcdctl
+    etcd_version: "v3.5.21"
+    etcdctl_path: /usr/local/bin/etcdctl
+    etcd_certs: >-
+      --endpoints=https://127.0.0.1:2379
+      --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
+      --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key
+      --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt
+
     # Cluster networking (must match existing cluster)
     cluster_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
@@ -414,6 +423,27 @@
       when: tmpfs_resized is changed
 
     # =============================================
+    # PHASE 1b: Install etcdctl (needed for member management)
+    # =============================================
+
+    - name: Install etcdctl binary
+      shell: |
+        if [ -x {{ etcdctl_path }} ]; then
+          echo "already present"
+          exit 0
+        fi
+        ARCH=$(uname -m)
+        case $ARCH in
+          aarch64) ARCH=arm64 ;;
+          x86_64) ARCH=amd64 ;;
+        esac
+        curl -sL "https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-${ARCH}.tar.gz" \
+          | tar xz --strip-components=1 -C /usr/local/bin "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
+        chmod 755 {{ etcdctl_path }}
+      register: etcdctl_install
+      changed_when: "'already present' not in etcdctl_install.stdout"
+
+    # =============================================
     # PHASE 2: Force restore from snapshot
     # =============================================
 
@@ -570,6 +600,34 @@
         - needs_restart | bool
         - server_token_file.stdout | default('') != k3s_token
       no_log: true
+
+    # Remove stale etcd member from peer before starting k3s
+    # (needed after reboot: tmpfs wiped, but peer still has this node as member)
+    - name: Get stale etcd member ID from peer
+      delegate_to: "{{ peer_node }}"
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member list -w simple | grep '{{ ansible_host }}' | cut -d',' -f1 || true
+      register: stale_member_id
+      when:
+        - etcd_data_state.stdout == "empty"
+        - needs_restart | bool or k3s_state.stdout == 'inactive'
+
+    - name: Remove stale etcd member from peer
+      delegate_to: "{{ peer_node }}"
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member remove {{ stale_member_id.stdout }}
+      register: member_removal
+      when:
+        - stale_member_id is not skipped
+        - stale_member_id.stdout | default('') | length > 0
+      changed_when: member_removal.rc == 0
+
+    - name: Show member removal result
+      debug:
+        msg: "Removed stale etcd member {{ stale_member_id.stdout }} from {{ peer_node }}"
+      when: member_removal is changed
 
     - name: Start k3s after fixes
       systemd:

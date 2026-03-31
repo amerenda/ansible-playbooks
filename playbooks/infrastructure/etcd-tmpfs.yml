@@ -38,7 +38,7 @@
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
     tmpfs_size: "1G"
     etcd_version: "v3.5.21"
-    etcdctl_path: /tmp/etcdctl
+    etcdctl_path: /usr/local/bin/etcdctl
     etcd_certs: >-
       --endpoints=https://127.0.0.1:2379
       --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
