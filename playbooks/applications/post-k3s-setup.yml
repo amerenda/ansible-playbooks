@@ -23,6 +23,8 @@
     argocd_version: "7.8.13"
     # This playbook runs on localhost, so is_first_controller is always true
     is_first_controller: true
+    # BWS-fetched secrets (set by fetch-secrets.yml when run via all.yml)
+    argocd_repo_pat: "{{ hostvars['localhost']['fetched_secrets']['argocd_repo_pat'] | default('') }}"
 
   pre_tasks:
     - name: Check if kubeconfig exists
@@ -127,22 +129,70 @@
       remote_user: "{{ local_user }}"
       tags: [argocd, projects, bootstrap]
 
-    - name: Apply ArgoCD repo secret (GitHub PAT for SHA-based git fetch)
+    - name: Create ArgoCD repo secret from BWS
       shell: |
-        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/bootstrap/argocd-repo-secret.yaml"
-      when: is_first_controller
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: repo-k3s-dean-gitops
+          namespace: default
+          labels:
+            argocd.argoproj.io/secret-type: repository
+        type: Opaque
+        stringData:
+          type: git
+          url: https://github.com/amerenda/k3s-dean-gitops.git
+          username: amerenda
+          password: "{{ argocd_repo_pat }}"
+        EOF
+      when:
+        - is_first_controller
+        - argocd_repo_pat | length > 0
       delegate_to: localhost
       become: no
       remote_user: "{{ local_user }}"
+      no_log: true
       tags: [argocd, secrets, bootstrap]
 
-    - name: Apply Bitwarden credentials secret
+    - name: Warn if ArgoCD repo PAT not available from BWS
+      ansible.builtin.debug:
+        msg: |
+          ArgoCD repo secret NOT created — argocd_repo_pat not fetched from BWS.
+          Run via all.yml with -e bws_access_token=<TOKEN>, or apply manually:
+            kubectl apply -f bootstrap/argocd-repo-secret.yaml
+      when: argocd_repo_pat | length == 0
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Create Bitwarden credentials secret for ESO
       shell: |
-        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f "{{ gitops_local_path }}/bootstrap/bitwarden-credentials-secret.yaml"
-      when: is_first_controller
+        kubectl --kubeconfig="/home/{{ local_user }}/.kube/config" apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: bitwarden-credentials
+          namespace: default
+        type: Opaque
+        stringData:
+          access-token: "{{ bws_access_token }}"
+        EOF
+      when:
+        - is_first_controller
+        - bws_access_token is defined
+        - bws_access_token | length > 0
       delegate_to: localhost
       become: no
       remote_user: "{{ local_user }}"
+      no_log: true
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Warn if BWS access token not available for ESO
+      ansible.builtin.debug:
+        msg: |
+          Bitwarden credentials secret NOT created — bws_access_token not provided.
+          Run with -e bws_access_token=<TOKEN>, or apply manually:
+            kubectl apply -f bootstrap/bitwarden-credentials-secret.yaml
+      when: bws_access_token is not defined or bws_access_token | default('') | length == 0
       tags: [argocd, secrets, bootstrap]
 
     - name: Build and push kaniko runner image
@@ -174,9 +224,8 @@
           3. Secrets syncing: kubectl get externalsecrets -A
           4. Runners online: kubectl get autoscalingrunnerset -A
 
-          Manual steps if not done:
-          - Update bootstrap/argocd-repo-secret.yaml with your GITOPS_PAT
-          - Update bootstrap/bitwarden-credentials-secret.yaml with your Bitwarden token
-          - Verify runner-ci-credentials ExternalSecrets are synced in arc-runners-* namespaces
+          Secrets created from BWS:
+          - repo-k3s-dean-gitops: {{ 'YES' if argocd_repo_pat | length > 0 else 'NO (apply manually)' }}
+          - bitwarden-credentials: {{ 'YES' if (bws_access_token | default('') | length > 0) else 'NO (apply manually)' }}
       when: is_first_controller
       tags: [argocd, reminder]

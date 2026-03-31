@@ -71,18 +71,11 @@
         - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
       no_log: true
 
-    - name: "FALLBACK: Set k3s token from environment variable"
-      set_fact:
-        k3s_token: "{{ ansible_env.K3S_TOKEN }}"
-      when:
-        - k3s_token is not defined or k3s_token == ""
-        - ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
-
     - name: Validate k3s token is set (only required when replacing)
       fail:
         msg: |
-          k3s_token is not set. Preferred: run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
-          Fallback: -e k3s_token=<TOKEN> or K3S_TOKEN env var (transitional, will be removed)
+          k3s_token is not set. Run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
+          Or pass directly: -e k3s_token=<TOKEN>
       when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
 
     - name: Check if k3s token file exists on first controller
@@ -158,7 +151,7 @@
         curl -sfL https://get.k3s.io | \
         INSTALL_K3S_VERSION="{{ k3s_version }}" \
         INSTALL_K3S_EXEC="server --cluster-init -disable=traefik --flannel-backend none" \
-        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+        K3S_TOKEN="{{ k3s_token }}" \
       when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
       tags: [k3s, install]
 
@@ -176,7 +169,7 @@
         curl -sfL https://get.k3s.io | \
         INSTALL_K3S_VERSION="{{ k3s_version }}" \
         INSTALL_K3S_EXEC="server -disable=traefik --flannel-backend none" \
-        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+        K3S_TOKEN="{{ k3s_token }}" \
         K3S_URL=https://{{ hostvars[first_controller]['ansible_host'] }}:6443 sh -
       when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and not is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
       ignore_errors: yes

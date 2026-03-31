@@ -67,7 +67,7 @@
     - name: SAFETY — refuse to run on multiple hosts simultaneously
       assert:
         that:
-          - ansible_play_hosts | length == 1 or serial is defined
+          - ansible_play_batch | length == 1
         fail_msg: |
           =============================================
           REFUSING TO RUN ON MULTIPLE HOSTS AT ONCE!

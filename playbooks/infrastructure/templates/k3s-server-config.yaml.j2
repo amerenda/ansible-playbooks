@@ -17,7 +17,7 @@ server: "https://{{ hostvars[first_controller]['ansible_host'] }}:6443"
 {% endif %}
 
 # Token for cluster authentication
-token: "{{ k3s_token | default(ansible_env.K3S_TOKEN) }}"
+token: "{{ k3s_token }}"
 
 # Data directory
 data-dir: "{{ k3s_data_dir }}"

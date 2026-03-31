@@ -28,6 +28,21 @@
   import_playbook: playbooks/infrastructure/post-k3s.yml
   tags: [k3s, install, post-setup]
 
+# etcd on tmpfs — migrate etcd data dir to RAM disk (serial: 1, safe on running cluster)
+- name: Migrate etcd to tmpfs
+  import_playbook: playbooks/infrastructure/etcd-tmpfs.yml
+  tags: [k3s, etcd, tmpfs]
+
+# Recovery service — deploy auto-recovery for full power loss
+- name: Deploy etcd auto-recovery
+  import_playbook: playbooks/infrastructure/k3s-recover.yml
+  tags: [k3s, etcd, recover]
+
+# ArgoCD bootstrap — install ArgoCD and apply root-app
+- name: Post-K3s Setup (ArgoCD bootstrap)
+  import_playbook: playbooks/applications/post-k3s-setup.yml
+  tags: [post-setup, argocd, bootstrap]
+
 # Smoke test — validate cluster health after all k3s setup
 - name: Cluster Smoke Test
   import_playbook: playbooks/infrastructure/smoke-test.yml

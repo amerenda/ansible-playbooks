@@ -53,21 +53,22 @@
         - bws_secrets is defined
         - bws_secrets.k3s_token | default('') | length > 0
       block:
-        - name: Check if bws CLI is installed
-          ansible.builtin.stat:
-            path: /usr/local/bin/bws
-          register: bws_check
+        - name: Find bws CLI on PATH
+          ansible.builtin.command: which bws
+          register: bws_which
+          changed_when: false
+          failed_when: false
 
         - name: Fail if bws CLI not installed
           ansible.builtin.fail:
             msg: |
-              bws CLI not installed. Run fetch-secrets.yml first, or install manually:
+              bws CLI not found on PATH. Run fetch-secrets.yml first, or install manually:
                 See playbooks/infrastructure/fetch-secrets.yml for install steps
-          when: not bws_check.stat.exists
+          when: bws_which.rc != 0
 
         - name: Fetch k3s_token from BWS
           ansible.builtin.command: >-
-            /usr/local/bin/bws secret get {{ bws_secrets.k3s_token }}
+            {{ bws_which.stdout }} secret get {{ bws_secrets.k3s_token }}
             --access-token {{ bws_access_token }}
             --output json
           register: bws_token_result
