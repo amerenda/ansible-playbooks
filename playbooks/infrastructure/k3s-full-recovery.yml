@@ -135,23 +135,27 @@
       shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
       register: tmpfs_state
       changed_when: false
+      check_mode: false
 
     - name: Check for snapshots
       shell: ls -t {{ snapshot_dir }}/etcd-snapshot-* 2>/dev/null | head -1
       register: latest_snapshot
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Get snapshot timestamp
       shell: stat -c %Y {{ latest_snapshot.stdout }} 2>/dev/null || echo "0"
       register: snapshot_mtime
       changed_when: false
+      check_mode: false
       when: latest_snapshot.stdout | default('') | length > 0
 
     - name: Check k3s state
       shell: systemctl is-active k3s 2>/dev/null || echo "inactive"
       register: k3s_state
       changed_when: false
+      check_mode: false
 
     - name: Check k3s API
       shell: >-
@@ -159,6 +163,7 @@
         https://{{ ansible_host }}:6443/healthz 2>/dev/null || echo "000"
       register: k3s_api
       changed_when: false
+      check_mode: false
 
     - name: Show pre-flight status
       debug:
