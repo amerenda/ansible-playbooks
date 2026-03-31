@@ -625,10 +625,10 @@
 
     # Remove stale etcd member from peer before starting k3s
     # (needed after reboot: tmpfs wiped, but peer still has this node as member)
-    - name: Stop crash-looping k3s before member removal
-      systemd:
-        name: k3s
-        state: stopped
+    - name: Stop and mask k3s to prevent restart during member removal
+      shell: |
+        systemctl stop k3s
+        systemctl mask k3s
       when: k3s_crash_loop | bool and etcd_data_state.stdout == "empty"
 
     - name: Get stale etcd member ID from peer
@@ -656,6 +656,10 @@
       debug:
         msg: "Removed stale etcd member {{ stale_member_id.stdout }} from {{ peer_node }}"
       when: member_removal is changed
+
+    - name: Unmask k3s after member removal
+      shell: systemctl unmask k3s
+      when: k3s_crash_loop | bool and etcd_data_state.stdout == "empty"
 
     - name: Start k3s after fixes
       systemd:
