@@ -176,11 +176,29 @@
       loop_control:
         label: "{{ item.item }}"
 
+    - name: "CHECK: etcdctl binary exists"
+      ansible.builtin.stat:
+        path: /usr/local/bin/etcdctl
+      delegate_to: "{{ item }}"
+      register: etcdctl_binary
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have etcdctl"
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.executable
+        fail_msg: "etcdctl missing or not executable on {{ item.item }}"
+        quiet: true
+      loop: "{{ etcdctl_binary.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
     - name: "PASS: Boot recovery chain"
       ansible.builtin.debug:
         msg: >-
           All {{ expected_controllers | length }} controllers have:
-          recovery service enabled, script executable,
+          recovery service enabled, script executable, etcdctl installed,
           k3s depends on recovery, snapshots present
           ({{ snapshot_count.results | map(attribute='stdout') | map('int') | list | join(', ') }} snapshots)
 
