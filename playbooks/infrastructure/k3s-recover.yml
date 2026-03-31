@@ -119,8 +119,8 @@
     restore_priority: ["rpi5-1", "rpi5-0", "rpi4-0"]
 
     # Flags (pass via -e)
-    force_restore: "{{ force_restore | default(false) | bool }}"
-    rotate_token: "{{ rotate_token | default(false) | bool }}"
+    do_force_restore: "{{ force_restore | default(false) | bool }}"
+    do_rotate_token: "{{ rotate_token | default(false) | bool }}"
 
   pre_tasks:
     - name: Use k3s_token from BWS (fetched in previous play)
@@ -147,7 +147,7 @@
           That node restores from snapshot, then run without force_restore
           on the others so they rejoin.
           Example: --limit rpi5-1 -e force_restore=true
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # --- Detect current state ---
 
@@ -272,8 +272,8 @@
           latest snapshot:    {{ latest_snapshot.stdout | default('NONE') }}
           token mismatches:   {{ token_mismatch_count.stdout }}
           --- flags ---
-          force_restore:      {{ force_restore }}
-          rotate_token:       {{ rotate_token }}
+          force_restore:      {{ do_force_restore }}
+          rotate_token:       {{ do_rotate_token }}
 
     # --- Determine what needs fixing ---
 
@@ -298,7 +298,7 @@
         destructive_action: "rotate k3s cluster token on {{ inventory_hostname }}"
         skipped_checks: "cluster health gate (token rotation changes auth for all nodes)"
       when:
-        - rotate_token | bool
+        - do_rotate_token | bool
         - inventory_hostname == ansible_play_hosts[0]
 
     - name: Rotate cluster token
@@ -306,7 +306,7 @@
         k3s token rotate --new-token '{{ k3s_token }}'
       register: token_rotated
       when:
-        - rotate_token | bool
+        - do_rotate_token | bool
         - k3s_state.stdout == 'active'
         - inventory_hostname == ansible_play_hosts[0]
       no_log: true
@@ -321,7 +321,7 @@
     - name: Mark restart needed for token rotation
       set_fact:
         needs_restart: true
-      when: rotate_token | bool
+      when: do_rotate_token | bool
 
     # =============================================
     # PHASE 1: Fix config and tmpfs (always safe)
@@ -422,45 +422,45 @@
       vars:
         destructive_action: "wipe etcd and restore from snapshot on {{ inventory_hostname }}"
         skipped_checks: "cluster health gate (force restore wipes and rebuilds etcd)"
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: Validate snapshot exists for force_restore
       assert:
         that: latest_snapshot.stdout | default('') | length > 0
         fail_msg: "No snapshots found in {{ snapshot_dir }} — cannot restore"
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Stop k3s"
       systemd:
         name: k3s
         state: stopped
-      when: force_restore | bool and k3s_state.stdout != 'inactive'
+      when: do_force_restore | bool and k3s_state.stdout != 'inactive'
 
     - name: "FORCE RESTORE: Unmount tmpfs"
       shell: umount {{ etcd_mount_dir }} 2>/dev/null || true
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Clean etcd data on SD card"
       shell: >-
         rm -rf {{ etcd_mount_dir }}/* {{ etcd_mount_dir }}-old-*
         {{ etcd_data_dir }}/etcd-tmp
         {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Comment out server line for cluster-reset"
       shell: sed -i 's/^server:/#FORCE_RESTORE#server:/' {{ k3s_config_path }}
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Restore from snapshot {{ latest_snapshot.stdout | default('') | basename }}"
       shell: >-
         k3s server --cluster-reset
         --cluster-reset-restore-path={{ latest_snapshot.stdout }}
-      when: force_restore | bool
+      when: do_force_restore | bool
       register: restore_result
 
     - name: "FORCE RESTORE: Re-enable server line"
       shell: sed -i 's/^#FORCE_RESTORE#server:/server:/' {{ k3s_config_path }}
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Copy restored data into tmpfs"
       shell: |
@@ -469,7 +469,7 @@
         cp -a /tmp/etcd-restored/. {{ etcd_mount_dir }}/
         rm -rf /tmp/etcd-restored
         rm -rf {{ etcd_mount_dir }}-old-* {{ etcd_data_dir }}/etcd-tmp
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Update server token file"
       copy:
@@ -478,14 +478,14 @@
         owner: root
         group: root
         mode: "0600"
-      when: force_restore | bool
+      when: do_force_restore | bool
       no_log: true
 
     - name: "FORCE RESTORE: Start k3s"
       systemd:
         name: k3s
         state: started
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Wait for API"
       uri:
@@ -498,12 +498,12 @@
       until: restore_api_health.status in [200, 401]
       retries: 60
       delay: 10
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Rotate token to match provided value"
       shell: >-
         k3s token rotate --new-token '{{ k3s_token }}'
-      when: force_restore | bool
+      when: do_force_restore | bool
       no_log: true
 
     - name: Show force restore result
@@ -514,12 +514,12 @@
           API health: {{ restore_api_health.status | default('N/A') }}
           Token set to provided value.
           Now run this playbook WITHOUT force_restore on the other nodes.
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # Skip remaining phases if force_restore was used
     - name: End play after force restore
       meta: end_host
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # =============================================
     # PHASE 3: Fix token mismatch (requires restart)
