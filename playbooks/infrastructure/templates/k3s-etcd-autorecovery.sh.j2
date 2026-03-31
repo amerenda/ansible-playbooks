@@ -65,21 +65,32 @@ check_host_alive() {
     timeout 2 bash -c "echo >/dev/tcp/${host}/22" 2>/dev/null
 }
 
-# Remove stale etcd member for this node from a peer
-# Without this, k3s fails with "duplicate node name found" on rejoin
-remove_stale_member() {
+# Remove stale etcd member and orphaned learners for this node from a peer.
+# Without this, k3s fails with "duplicate node name found" on rejoin.
+# Must also wipe local etcd dir to ensure completely fresh join.
+remove_stale_members() {
     for peer in "${PEER_IPS[@]}"; do
         local PEER_CERTS="--endpoints=https://${peer}:2379 --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt"
-        local MEMBER_ID
-        MEMBER_ID=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | grep "$NODE_IP" | cut -d',' -f1) || true
-        if [ -n "$MEMBER_ID" ]; then
-            log "Removing stale etcd member $MEMBER_ID (this node) from peer $peer"
-            if ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member remove "$MEMBER_ID" 2>&1; then
-                log "Stale member removed — k3s can rejoin"
-                return 0
+        local MEMBERS
+        # Find members matching this node's IP
+        MEMBERS=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | grep "$NODE_IP" | cut -d',' -f1) || true
+        # Find orphaned learner members (empty name from failed join attempts)
+        local LEARNERS
+        LEARNERS=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | awk -F', ' '$3 == "" {print $1}') || true
+        local ALL_STALE="$MEMBERS $LEARNERS"
+        local removed=false
+        for member_id in $ALL_STALE; do
+            [ -z "$member_id" ] && continue
+            log "Removing stale etcd member $member_id from peer $peer"
+            if ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member remove "$member_id" 2>&1; then
+                log "Removed member $member_id"
+                removed=true
             else
-                log "WARNING: Failed to remove member from peer $peer"
+                log "WARNING: Failed to remove member $member_id from peer $peer"
             fi
+        done
+        if [ "$removed" = true ]; then
+            return 0
         fi
     done
     return 1
@@ -87,10 +98,13 @@ remove_stale_member() {
 
 if check_peers; then
     if [ -x "$ETCDCTL" ]; then
-        remove_stale_member || log "WARNING: Could not remove stale member — k3s may fail to rejoin"
+        remove_stale_members || log "WARNING: Could not remove stale members — k3s may fail to rejoin"
     else
-        log "WARNING: etcdctl not found at $ETCDCTL — cannot remove stale member"
+        log "WARNING: etcdctl not found at $ETCDCTL — cannot remove stale members"
     fi
+    # Wipe etcd dir completely for a clean join
+    rm -rf "${ETCD_MOUNT:?}"/* 2>/dev/null || true
+    log "Cleaned etcd data — k3s will rejoin fresh"
     exit 0
 fi
 

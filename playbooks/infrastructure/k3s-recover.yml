@@ -630,43 +630,59 @@
         - server_token_file.stdout | default('') != k3s_token
       no_log: true
 
-    # Remove stale etcd member from peer before starting k3s
-    # (needed after reboot: tmpfs wiped, but peer still has this node as member)
-    - name: Stop and mask k3s to prevent restart during member removal
+    # =============================================
+    # Stale etcd member cleanup (reboot recovery)
+    # When tmpfs is empty and k3s is crash-looping with "duplicate node name",
+    # we must: stop k3s, remove stale member + orphaned learners from peer,
+    # wipe local etcd dir completely, then start k3s fresh.
+    # =============================================
+
+    - name: Stop and mask k3s to prevent restart during member cleanup
       shell: |
         systemctl stop k3s
         systemctl mask k3s
-      when: k3s_crash_loop | bool and etcd_data_state.stdout == "empty"
-
-    - name: Get stale etcd member ID from peer
-      delegate_to: "{{ peer_node }}"
-      shell: >-
-        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
-        member list -w simple | grep '{{ ansible_host }}' | cut -d',' -f1 || true
-      register: stale_member_id
       when:
         - etcd_data_state.stdout == "empty"
-        - needs_restart | bool or k3s_state.stdout == 'inactive' or k3s_crash_loop | bool
+        - k3s_crash_loop | bool or needs_restart | bool or k3s_state.stdout == 'inactive'
 
-    - name: Remove stale etcd member from peer
+    - name: Get stale etcd member IDs from peer (this node + orphaned learners)
+      delegate_to: "{{ peer_node }}"
+      shell: |
+        # Find members matching this node's IP
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
+          member list -w simple 2>/dev/null | \
+          grep '{{ ansible_host }}' | cut -d',' -f1
+        # Find orphaned learner members (empty name from failed join attempts)
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }} \
+          member list -w simple 2>/dev/null | \
+          awk -F', ' '$3 == "" {print $1}'
+      register: stale_member_ids
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Remove stale etcd members from peer
       delegate_to: "{{ peer_node }}"
       shell: >-
         ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
-        member remove {{ stale_member_id.stdout }}
-      register: member_removal
+        member remove {{ item }}
+      loop: "{{ stale_member_ids.stdout_lines | default([]) }}"
       when:
-        - stale_member_id is not skipped
-        - stale_member_id.stdout | default('') | length > 0
-      changed_when: member_removal.rc == 0
+        - stale_member_ids is not skipped
+        - item | length > 0
+      register: member_removal
+      failed_when: false
 
-    - name: Show member removal result
+    - name: Show member removal results
       debug:
-        msg: "Removed stale etcd member {{ stale_member_id.stdout }} from {{ peer_node }}"
-      when: member_removal is changed
+        msg: "Removed etcd members from {{ peer_node }}: {{ stale_member_ids.stdout_lines | default([]) }}"
+      when: stale_member_ids.stdout_lines | default([]) | length > 0
 
-    - name: Unmask k3s after member removal
+    - name: Wipe etcd data directory completely
+      shell: rm -rf {{ etcd_mount_dir }}/*
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Unmask k3s after member cleanup
       shell: systemctl unmask k3s
-      when: k3s_crash_loop | bool and etcd_data_state.stdout == "empty"
+      when: etcd_data_state.stdout == "empty"
 
     - name: Start k3s after fixes
       systemd:
