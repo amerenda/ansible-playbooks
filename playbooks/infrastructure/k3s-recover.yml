@@ -12,22 +12,73 @@
 # This playbook is SAFE to run on a healthy cluster — it will detect
 # that everything is fine and make no changes (unless force flags are set).
 #
-# Usage:
-#   # Normal recovery (detect and fix issues):
+# Usage (preferred — fetch token from BWS):
+#   # Normal recovery:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<TOKEN>
+#     -e bws_access_token=<BWS_TOKEN>
 #
-#   # Force snapshot restore (nuclear option — wipes etcd, restores from snapshot):
+#   # Force snapshot restore:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<NEW_TOKEN> -e force_restore=true --limit rpi5-1
-#   # Then run without force_restore on the other nodes to rejoin.
+#     -e bws_access_token=<BWS_TOKEN> -e force_restore=true --limit rpi5-1
 #
-#   # Rotate token (live, on a running cluster):
+#   # Rotate token:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
-#     -e k3s_token=<NEW_TOKEN> -e rotate_token=true
+#     -e bws_access_token=<BWS_TOKEN> -e rotate_token=true
+#
+# Usage (transitional — direct token, will be removed):
+#   ansible-playbook ... -e k3s_token=<TOKEN>
 #
 # The k3s_token should be just the password (not the full K10... format).
-# After rotate_token, update BWS with the new value.
+#
+# Secrets: This playbook fetches k3s_token from BWS automatically when
+# bws_access_token is provided. Direct -e k3s_token is transitional.
+
+- name: Fetch secrets for recovery
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [k3s, etcd, recover]
+  vars_files:
+    - ../../group_vars/k3s.yml
+  tasks:
+    - name: Skip BWS fetch if no access token provided
+      ansible.builtin.debug:
+        msg: "No bws_access_token provided — expecting k3s_token via -e"
+      when: bws_access_token is not defined or bws_access_token == ""
+
+    - name: Fetch k3s_token from BWS
+      when:
+        - bws_access_token is defined
+        - bws_access_token | length > 0
+        - bws_secrets is defined
+        - bws_secrets.k3s_token | default('') | length > 0
+      block:
+        - name: Find bws CLI on PATH
+          ansible.builtin.command: which bws
+          register: bws_which
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if bws CLI not installed
+          ansible.builtin.fail:
+            msg: |
+              bws CLI not found on PATH. Run fetch-secrets.yml first, or install manually:
+                See playbooks/infrastructure/fetch-secrets.yml for install steps
+          when: bws_which.rc != 0
+
+        - name: Fetch k3s_token from BWS
+          ansible.builtin.command: >-
+            {{ bws_which.stdout }} secret get {{ bws_secrets.k3s_token }}
+            --access-token {{ bws_access_token }}
+            --output json
+          register: bws_token_result
+          no_log: true
+          changed_when: false
+
+        - name: Set k3s_token from BWS
+          ansible.builtin.set_fact:
+            k3s_token: "{{ (bws_token_result.stdout | from_json).value }}"
+          no_log: true
 
 - name: Recover k3s cluster
   hosts: controllers
@@ -44,6 +95,15 @@
     etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
     tmpfs_size: "1G"
+
+    # etcdctl
+    etcd_version: "v3.5.21"
+    etcdctl_path: /usr/local/bin/etcdctl
+    etcd_certs: >-
+      --endpoints=https://127.0.0.1:2379
+      --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
+      --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key
+      --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt
 
     # Cluster networking (must match existing cluster)
     cluster_cidr: "10.42.0.0/16"
@@ -68,19 +128,25 @@
     restore_priority: ["rpi5-1", "rpi5-0", "rpi4-0"]
 
     # Flags (pass via -e)
-    force_restore: "{{ force_restore | default(false) | bool }}"
-    rotate_token: "{{ rotate_token | default(false) | bool }}"
+    do_force_restore: "{{ force_restore | default(false) | bool }}"
+    do_rotate_token: "{{ rotate_token | default(false) | bool }}"
 
   pre_tasks:
-    - name: Validate k3s_token is provided
+    - name: Use k3s_token from BWS (fetched in previous play)
+      ansible.builtin.set_fact:
+        k3s_token: "{{ hostvars['localhost']['k3s_token'] }}"
+      when:
+        - k3s_token is not defined or k3s_token == ""
+        - hostvars['localhost']['k3s_token'] is defined
+      no_log: true
+
+    - name: Validate k3s_token is available
       assert:
         that: k3s_token is defined and k3s_token | length > 0
         fail_msg: |
-          k3s_token is required. Pass the token password:
-            -e k3s_token=<PASSWORD>
-          Get it from a working node:
-            ssh <node> sudo cat /var/lib/rancher/k3s/server/token
-          Use just the password after "::server:"
+          k3s_token is not set. Provide it via BWS (preferred) or directly:
+            -e bws_access_token=<TOKEN>  (fetches from BWS)
+            -e k3s_token=<PASSWORD>      (transitional, will be removed)
 
     - name: Validate force_restore is used with --limit
       assert:
@@ -90,7 +156,7 @@
           That node restores from snapshot, then run without force_restore
           on the others so they rejoin.
           Example: --limit rpi5-1 -e force_restore=true
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # --- Detect current state ---
 
@@ -116,6 +182,17 @@
         https://{{ ansible_host }}:6443/healthz 2>/dev/null || echo "000"
       register: k3s_api_status
       changed_when: false
+
+    - name: Check k3s restart count
+      shell: systemctl show k3s --property=NRestarts --value 2>/dev/null || echo "0"
+      register: k3s_restart_count
+      changed_when: false
+
+    - name: Detect crash-looping k3s
+      set_fact:
+        k3s_crash_loop: >-
+          {{ k3s_state.stdout in ['activating', 'active'] and
+             (k3s_api_status.stdout == '000' or k3s_restart_count.stdout | int > 2) }}
 
     - name: Check if tmpfs is mounted
       shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
@@ -171,6 +248,32 @@
       register: token_mismatch_count
       changed_when: false
 
+    # --- Cluster health check (informational in recovery mode) ---
+    # In recovery, we don't FAIL on unhealthy nodes (that's why we're recovering),
+    # but we log the state so the operator knows what they're working with.
+
+    - name: Check cluster health (informational)
+      ansible.builtin.command: kubectl get nodes -o json
+      register: recovery_node_status
+      delegate_to: "{{ groups['controllers'][0] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Show cluster node status
+      ansible.builtin.debug:
+        msg: >-
+          Cluster nodes:
+          {% set nodes = (recovery_node_status.stdout | default('{"items":[]}') | from_json)['items'] | default([]) %}
+          {% for node in nodes %}
+          {%   set ready = 'Unknown' %}
+          {%   for cond in node.status.conditions | default([]) %}
+          {%     if cond.type == 'Ready' %}{% set ready = cond.status %}{% endif %}
+          {%   endfor %}
+          {{ node.metadata.name }}={{ ready }}{{ ', ' if not loop.last else '' }}
+          {%- endfor %}
+          {{ 'unable to query cluster' if nodes | length == 0 else '' }}
+      when: recovery_node_status.rc | default(1) == 0
+
     # --- Summarize state ---
 
     - name: Summarize node state
@@ -189,8 +292,8 @@
           latest snapshot:    {{ latest_snapshot.stdout | default('NONE') }}
           token mismatches:   {{ token_mismatch_count.stdout }}
           --- flags ---
-          force_restore:      {{ force_restore }}
-          rotate_token:       {{ rotate_token }}
+          force_restore:      {{ do_force_restore }}
+          rotate_token:       {{ do_rotate_token }}
 
     # --- Determine what needs fixing ---
 
@@ -209,12 +312,21 @@
     # PHASE 0: Token rotation (live, on running cluster)
     # =============================================
 
+    - name: Confirm token rotation
+      ansible.builtin.include_tasks: ../../tasks/confirm-destructive.yml
+      vars:
+        destructive_action: "rotate k3s cluster token on {{ inventory_hostname }}"
+        skipped_checks: "cluster health gate (token rotation changes auth for all nodes)"
+      when:
+        - do_rotate_token | bool
+        - inventory_hostname == ansible_play_hosts[0]
+
     - name: Rotate cluster token
       shell: >-
         k3s token rotate --new-token '{{ k3s_token }}'
       register: token_rotated
       when:
-        - rotate_token | bool
+        - do_rotate_token | bool
         - k3s_state.stdout == 'active'
         - inventory_hostname == ansible_play_hosts[0]
       no_log: true
@@ -229,7 +341,7 @@
     - name: Mark restart needed for token rotation
       set_fact:
         needs_restart: true
-      when: rotate_token | bool
+      when: do_rotate_token | bool
 
     # =============================================
     # PHASE 1: Fix config and tmpfs (always safe)
@@ -322,46 +434,92 @@
       when: tmpfs_resized is changed
 
     # =============================================
+    # PHASE 1b: Install etcdctl (needed for member management)
+    # =============================================
+
+    - name: Install etcdctl binary
+      shell: |
+        if [ -x {{ etcdctl_path }} ]; then
+          echo "already present"
+          exit 0
+        fi
+        ARCH=$(uname -m)
+        case $ARCH in
+          aarch64) ARCH=arm64 ;;
+          x86_64) ARCH=amd64 ;;
+        esac
+        curl -sL "https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-${ARCH}.tar.gz" \
+          | tar xz --strip-components=1 -C /usr/local/bin "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
+        chmod 755 {{ etcdctl_path }}
+      register: etcdctl_install
+      changed_when: "'already present' not in etcdctl_install.stdout"
+
+    - name: Install etcdctl on peer node
+      delegate_to: "{{ peer_node }}"
+      shell: |
+        if [ -x {{ etcdctl_path }} ]; then
+          echo "already present"
+          exit 0
+        fi
+        ARCH=$(uname -m)
+        case $ARCH in
+          aarch64) ARCH=arm64 ;;
+          x86_64) ARCH=amd64 ;;
+        esac
+        curl -sL "https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-${ARCH}.tar.gz" \
+          | tar xz --strip-components=1 -C /usr/local/bin "etcd-{{ etcd_version }}-linux-${ARCH}/etcdctl"
+        chmod 755 {{ etcdctl_path }}
+      register: etcdctl_peer_install
+      changed_when: "'already present' not in etcdctl_peer_install.stdout"
+
+    # =============================================
     # PHASE 2: Force restore from snapshot
     # =============================================
+
+    - name: Confirm force restore
+      ansible.builtin.include_tasks: ../../tasks/confirm-destructive.yml
+      vars:
+        destructive_action: "wipe etcd and restore from snapshot on {{ inventory_hostname }}"
+        skipped_checks: "cluster health gate (force restore wipes and rebuilds etcd)"
+      when: do_force_restore | bool
 
     - name: Validate snapshot exists for force_restore
       assert:
         that: latest_snapshot.stdout | default('') | length > 0
         fail_msg: "No snapshots found in {{ snapshot_dir }} — cannot restore"
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Stop k3s"
       systemd:
         name: k3s
         state: stopped
-      when: force_restore | bool and k3s_state.stdout != 'inactive'
+      when: do_force_restore | bool and k3s_state.stdout != 'inactive'
 
     - name: "FORCE RESTORE: Unmount tmpfs"
       shell: umount {{ etcd_mount_dir }} 2>/dev/null || true
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Clean etcd data on SD card"
       shell: >-
         rm -rf {{ etcd_mount_dir }}/* {{ etcd_mount_dir }}-old-*
         {{ etcd_data_dir }}/etcd-tmp
         {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Comment out server line for cluster-reset"
       shell: sed -i 's/^server:/#FORCE_RESTORE#server:/' {{ k3s_config_path }}
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Restore from snapshot {{ latest_snapshot.stdout | default('') | basename }}"
       shell: >-
         k3s server --cluster-reset
         --cluster-reset-restore-path={{ latest_snapshot.stdout }}
-      when: force_restore | bool
+      when: do_force_restore | bool
       register: restore_result
 
     - name: "FORCE RESTORE: Re-enable server line"
       shell: sed -i 's/^#FORCE_RESTORE#server:/server:/' {{ k3s_config_path }}
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Copy restored data into tmpfs"
       shell: |
@@ -370,7 +528,7 @@
         cp -a /tmp/etcd-restored/. {{ etcd_mount_dir }}/
         rm -rf /tmp/etcd-restored
         rm -rf {{ etcd_mount_dir }}-old-* {{ etcd_data_dir }}/etcd-tmp
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Update server token file"
       copy:
@@ -379,14 +537,14 @@
         owner: root
         group: root
         mode: "0600"
-      when: force_restore | bool
+      when: do_force_restore | bool
       no_log: true
 
     - name: "FORCE RESTORE: Start k3s"
       systemd:
         name: k3s
         state: started
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Wait for API"
       uri:
@@ -399,12 +557,12 @@
       until: restore_api_health.status in [200, 401]
       retries: 60
       delay: 10
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     - name: "FORCE RESTORE: Rotate token to match provided value"
       shell: >-
         k3s token rotate --new-token '{{ k3s_token }}'
-      when: force_restore | bool
+      when: do_force_restore | bool
       no_log: true
 
     - name: Show force restore result
@@ -415,12 +573,12 @@
           API health: {{ restore_api_health.status | default('N/A') }}
           Token set to provided value.
           Now run this playbook WITHOUT force_restore on the other nodes.
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # Skip remaining phases if force_restore was used
     - name: End play after force restore
       meta: end_host
-      when: force_restore | bool
+      when: do_force_restore | bool
 
     # =============================================
     # PHASE 3: Fix token mismatch (requires restart)
@@ -472,6 +630,68 @@
         - server_token_file.stdout | default('') != k3s_token
       no_log: true
 
+    # =============================================
+    # Stale etcd member cleanup (reboot recovery)
+    # When tmpfs is empty and k3s is crash-looping with "duplicate node name",
+    # we must: stop k3s, remove stale member + orphaned learners from peer,
+    # wipe local etcd dir completely, then start k3s fresh.
+    # =============================================
+
+    - name: Stop and mask k3s to prevent restart during member cleanup
+      shell: |
+        systemctl stop k3s
+        systemctl mask k3s
+      when:
+        - etcd_data_state.stdout == "empty"
+        - k3s_crash_loop | bool or needs_restart | bool or k3s_state.stdout == 'inactive'
+
+    - name: Get all etcd members from peer
+      delegate_to: "{{ peer_node }}"
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member list -w simple 2>/dev/null || true
+      register: etcd_member_list_raw
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Extract stale member IDs (this node + orphaned learners)
+      set_fact:
+        stale_member_ids: >-
+          {{ (etcd_member_list_raw.stdout_lines | default([]))
+             | select('search', ansible_host)
+             | map('regex_replace', ',.*', '')
+             | list
+             +
+             (etcd_member_list_raw.stdout_lines | default([]))
+             | select('regex', '^[^,]+,\s*\w+,\s*,')
+             | map('regex_replace', ',.*', '')
+             | list }}
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Remove stale etcd members from peer
+      delegate_to: "{{ peer_node }}"
+      shell: >-
+        ETCDCTL_API=3 {{ etcdctl_path }} {{ etcd_certs }}
+        member remove {{ item }}
+      loop: "{{ stale_member_ids | default([]) }}"
+      when:
+        - stale_member_ids | default([]) | length > 0
+        - item | length > 0
+      register: member_removal
+      failed_when: false
+
+    - name: Show member removal results
+      debug:
+        msg: "Removed etcd members from {{ peer_node }}: {{ stale_member_ids | default([]) }}"
+      when: stale_member_ids | default([]) | length > 0
+
+    - name: Wipe etcd data directory completely
+      shell: rm -rf {{ etcd_mount_dir }}/*
+      when: etcd_data_state.stdout == "empty"
+
+    - name: Unmask k3s after member cleanup
+      shell: systemctl unmask k3s
+      when: etcd_data_state.stdout == "empty"
+
     - name: Start k3s after fixes
       systemd:
         name: k3s
@@ -487,7 +707,7 @@
         name: k3s
         state: started
       when:
-        - k3s_state.stdout == 'inactive'
+        - k3s_state.stdout == 'inactive' or k3s_crash_loop | bool
         - not (needs_restart | bool)
         - k3s_binary.stat.exists
         - k3s_config_exists.stat.exists or (config_rendered is changed)

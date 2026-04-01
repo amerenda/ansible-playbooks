@@ -39,6 +39,19 @@
     
 
   pre_tasks:
+    # --- Cluster safety gate (skip on fresh install) ---
+    - name: Check if k3s is already running (pre-gate)
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_pre_check
+      ignore_errors: true
+
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "k3s controller install/update on {{ inventory_hostname }}"
+      when: k3s_pre_check.status.ActiveState | default('inactive') == 'active'
+
     - name: Check if etcd data directory exists
       stat:
         path: "{{ etcd_data_dir }}"
@@ -50,14 +63,19 @@
       register: k3s_running
       ignore_errors: yes
 
-    - name: Set k3s token from environment variable
-      set_fact:
-        k3s_token: "{{ ansible_env.K3S_TOKEN }}"
-      when: ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
+    - name: Use k3s_token from BWS (fetched by fetch-secrets.yml)
+      ansible.builtin.set_fact:
+        k3s_token: "{{ hostvars['localhost']['fetched_secrets']['k3s_token'] }}"
+      when:
+        - hostvars['localhost']['fetched_secrets'] is defined
+        - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
+      no_log: true
 
     - name: Validate k3s token is set (only required when replacing)
       fail:
-        msg: "k3s_token must be set when replace_cluster=true. Use -e k3s_token=your-token, set K3S_TOKEN env var, or set it in group_vars"
+        msg: |
+          k3s_token is not set. Run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
+          Or pass directly: -e k3s_token=<TOKEN>
       when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
 
     - name: Check if k3s token file exists on first controller
@@ -133,7 +151,7 @@
         curl -sfL https://get.k3s.io | \
         INSTALL_K3S_VERSION="{{ k3s_version }}" \
         INSTALL_K3S_EXEC="server --cluster-init -disable=traefik --flannel-backend none" \
-        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+        K3S_TOKEN="{{ k3s_token }}" \
       when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
       tags: [k3s, install]
 
@@ -151,7 +169,7 @@
         curl -sfL https://get.k3s.io | \
         INSTALL_K3S_VERSION="{{ k3s_version }}" \
         INSTALL_K3S_EXEC="server -disable=traefik --flannel-backend none" \
-        K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" \
+        K3S_TOKEN="{{ k3s_token }}" \
         K3S_URL=https://{{ hostvars[first_controller]['ansible_host'] }}:6443 sh -
       when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and not is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
       ignore_errors: yes
@@ -234,6 +252,17 @@
       run_once: true
 
 
+
+    # --- Post-flight: wait for this node, then verify cluster health ---
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post k3s controller setup on {{ inventory_hostname }}"
 
   handlers:
     - name: restart k3s

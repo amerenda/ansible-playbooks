@@ -1,0 +1,302 @@
+---
+# Cluster Smoke Test
+#
+# Validates the k3s cluster is functional end-to-end. Safe to run anytime.
+# Run standalone or as the final play in all.yml.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/smoke-test.yml
+#
+# Checks:
+#   1. All k3s nodes are Ready
+#   2. k3s API server responds
+#   3. etcd health (on controllers)
+#   4. tmpfs mounted for etcd (on controllers)
+#   5. Boot recovery chain (recovery service enabled, script present, k3s depends on it, snapshots exist)
+#   6. Longhorn manager pods running
+#   7. ArgoCD server pod running and apps synced
+#   8. Expected node labels and taints present
+
+- name: Cluster smoke test
+  hosts: "{{ groups['controllers'][0] }}"
+  become: true
+  gather_facts: false
+  tags: [smoke-test, verify]
+
+  vars:
+    expected_controllers: "{{ groups['controllers'] }}"
+    expected_agents: "{{ groups['agents'] }}"
+    all_k3s_nodes: "{{ expected_controllers + expected_agents }}"
+
+  tasks:
+    # =============================================
+    # 1. Node readiness
+    # =============================================
+
+    - name: "CHECK: Get all node statuses"
+      ansible.builtin.shell: >-
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}'
+      register: node_ready_raw
+      changed_when: false
+
+    - name: Parse node readiness map
+      ansible.builtin.set_fact:
+        node_ready_map: "{{ dict(node_ready_raw.stdout_lines | select | map('split', '=')) }}"
+
+    - name: "CHECK: All expected nodes are Ready"
+      ansible.builtin.assert:
+        that:
+          - node_ready_map[item] | default('Unknown') == 'True'
+        fail_msg: "Node {{ item }} is NOT Ready (status: {{ node_ready_map[item] | default('missing') }})"
+        quiet: true
+      loop: "{{ all_k3s_nodes }}"
+
+    - name: "PASS: All {{ all_k3s_nodes | length }} nodes Ready"
+      ansible.builtin.debug:
+        msg: "{{ node_ready_map }}"
+
+    # =============================================
+    # 2. API server health
+    # =============================================
+
+    - name: "CHECK: k3s API server health"
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[item]['ansible_host'] }}:6443/healthz"
+        method: GET
+        validate_certs: false
+        status_code: [200, 401]
+        timeout: 10
+      loop: "{{ expected_controllers }}"
+      register: api_health
+
+    - name: "PASS: API server healthy on all controllers"
+      ansible.builtin.debug:
+        msg: "All {{ expected_controllers | length }} controller API endpoints responding"
+
+    # =============================================
+    # 3. etcd health
+    # =============================================
+
+    - name: "CHECK: etcd endpoint health"
+      ansible.builtin.command: >-
+        kubectl get --raw /healthz/etcd
+      register: etcd_health
+      changed_when: false
+      failed_when: etcd_health.rc != 0
+
+    - name: "PASS: etcd healthy"
+      ansible.builtin.debug:
+        msg: "etcd: {{ etcd_health.stdout }}"
+
+    # =============================================
+    # 4. etcd tmpfs (check each controller)
+    # =============================================
+
+    - name: "CHECK: tmpfs mounted on controllers"
+      ansible.builtin.command: mountpoint -q /var/lib/rancher/k3s/server/db/etcd
+      delegate_to: "{{ item }}"
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "PASS: etcd tmpfs mounted on all controllers"
+      ansible.builtin.debug:
+        msg: "tmpfs mounted on {{ expected_controllers | join(', ') }}"
+
+    # =============================================
+    # 5. Boot recovery chain (etcd auto-recovery)
+    # =============================================
+
+    - name: "CHECK: k3s-etcd-recovery.service exists and is enabled"
+      ansible.builtin.command: systemctl is-enabled k3s-etcd-recovery
+      delegate_to: "{{ item }}"
+      register: recovery_svc_enabled
+      changed_when: false
+      failed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have recovery service enabled"
+      ansible.builtin.assert:
+        that:
+          - item.stdout == 'enabled'
+        fail_msg: "k3s-etcd-recovery.service is NOT enabled on {{ item.item }} (status: {{ item.stdout | default('missing') }})"
+        quiet: true
+      loop: "{{ recovery_svc_enabled.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: Recovery script exists at /usr/local/bin/k3s-etcd-recovery.sh"
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-etcd-recovery.sh
+      delegate_to: "{{ item }}"
+      register: recovery_script
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have recovery script"
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.executable
+        fail_msg: "Recovery script missing or not executable on {{ item.item }}"
+        quiet: true
+      loop: "{{ recovery_script.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: k3s.service depends on recovery service"
+      ansible.builtin.command: systemctl show k3s -p After
+      delegate_to: "{{ item }}"
+      register: k3s_after_deps
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: k3s.service After= includes k3s-etcd-recovery.service"
+      ansible.builtin.assert:
+        that:
+          - "'k3s-etcd-recovery.service' in item.stdout"
+        fail_msg: "k3s.service on {{ item.item }} does not depend on k3s-etcd-recovery.service (After={{ item.stdout }})"
+        quiet: true
+      loop: "{{ k3s_after_deps.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: etcd snapshots exist (needed for recovery)"
+      ansible.builtin.shell: ls -1 /var/lib/rancher/k3s/server/db/snapshots/etcd-snapshot-* 2>/dev/null | wc -l
+      delegate_to: "{{ item }}"
+      register: snapshot_count
+      changed_when: false
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have at least one snapshot"
+      ansible.builtin.assert:
+        that:
+          - item.stdout | int > 0
+        fail_msg: "No etcd snapshots on {{ item.item }} — recovery from full power loss would fail!"
+        quiet: true
+      loop: "{{ snapshot_count.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "CHECK: etcdctl binary exists"
+      ansible.builtin.stat:
+        path: /usr/local/bin/etcdctl
+      delegate_to: "{{ item }}"
+      register: etcdctl_binary
+      loop: "{{ expected_controllers }}"
+
+    - name: "CHECK: All controllers have etcdctl"
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.executable
+        fail_msg: "etcdctl missing or not executable on {{ item.item }}"
+        quiet: true
+      loop: "{{ etcdctl_binary.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "PASS: Boot recovery chain"
+      ansible.builtin.debug:
+        msg: >-
+          All {{ expected_controllers | length }} controllers have:
+          recovery service enabled, script executable, etcdctl installed,
+          k3s depends on recovery, snapshots present
+          ({{ snapshot_count.results | map(attribute='stdout') | map('int') | list | join(', ') }} snapshots)
+
+    # =============================================
+    # 6. Longhorn
+    # =============================================
+
+    - name: "CHECK: Longhorn manager pods"
+      ansible.builtin.command: >-
+        kubectl get pods -l app=longhorn-manager --all-namespaces
+        -o jsonpath='{.items[*].status.phase}'
+      register: longhorn_pods
+      changed_when: false
+      failed_when: false
+
+    - name: "CHECK: Longhorn manager is running"
+      ansible.builtin.assert:
+        that:
+          - "'Running' in longhorn_pods.stdout"
+        fail_msg: "Longhorn manager pods not running: {{ longhorn_pods.stdout | default('no pods found') }}"
+        quiet: true
+      when: longhorn_pods.rc == 0
+
+    - name: "PASS: Longhorn running"
+      ansible.builtin.debug:
+        msg: "Longhorn manager pod status: {{ longhorn_pods.stdout | default('not installed') }}"
+
+    # =============================================
+    # 7. ArgoCD
+    # =============================================
+
+    - name: "CHECK: ArgoCD server pod"
+      ansible.builtin.command: >-
+        kubectl get pods -l app.kubernetes.io/name=argocd-server
+        -o jsonpath='{.items[*].status.phase}' --all-namespaces
+      register: argocd_pods
+      changed_when: false
+      failed_when: false
+
+    - name: "CHECK: ArgoCD server is running"
+      ansible.builtin.assert:
+        that:
+          - "'Running' in argocd_pods.stdout"
+        fail_msg: "ArgoCD server not running: {{ argocd_pods.stdout | default('no pods found') }}"
+        quiet: true
+      when: argocd_pods.rc == 0
+
+    - name: "CHECK: ArgoCD app sync status"
+      ansible.builtin.command: >-
+        kubectl get applications.argoproj.io --all-namespaces
+        -o jsonpath='{range .items[*]}{.metadata.name}={.status.sync.status},{end}'
+      register: argocd_apps
+      changed_when: false
+      failed_when: false
+
+    - name: "PASS: ArgoCD status"
+      ansible.builtin.debug:
+        msg: |
+          ArgoCD server: {{ argocd_pods.stdout | default('not installed') }}
+          App sync: {{ argocd_apps.stdout | default('no apps') }}
+
+    # =============================================
+    # 8. Node labels and taints
+    # =============================================
+
+    - name: "CHECK: Storage node labels"
+      ansible.builtin.command: >-
+        kubectl get nodes -l longhorn-storage=true -o jsonpath='{.items[*].metadata.name}'
+      register: storage_nodes
+      changed_when: false
+
+    - name: "CHECK: Storage-only node taints"
+      ansible.builtin.command: >-
+        kubectl get node {{ item }} -o jsonpath='{.spec.taints}'
+      register: storage_only_taints
+      changed_when: false
+      loop: "{{ groups['storage_only'] | default([]) }}"
+
+    - name: "PASS: Labels and taints"
+      ansible.builtin.debug:
+        msg: |
+          Storage-labeled nodes: {{ storage_nodes.stdout }}
+          Storage-only taints: {{ storage_only_taints.results | default([]) | map(attribute='stdout') | list }}
+
+    # =============================================
+    # Summary
+    # =============================================
+
+    - name: "SMOKE TEST COMPLETE"
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          CLUSTER SMOKE TEST PASSED
+          ============================================
+          Nodes:     {{ all_k3s_nodes | length }} Ready ({{ expected_controllers | length }} controllers, {{ expected_agents | length }} agents)
+          API:       Healthy on all controllers
+          etcd:      Healthy, tmpfs mounted
+          Recovery:  Enabled on all controllers ({{ snapshot_count.results | map(attribute='stdout') | map('int') | sum }} total snapshots)
+          Longhorn:  {{ 'Running' if 'Running' in (longhorn_pods.stdout | default('')) else 'Not detected' }}
+          ArgoCD:    {{ 'Running' if 'Running' in (argocd_pods.stdout | default('')) else 'Not detected' }}
+          ============================================

@@ -47,6 +47,11 @@
           =============================================
       run_once: false
 
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "enable etcd metrics on {{ inventory_hostname }}"
+
     - name: Check current k3s config
       slurp:
         src: "{{ k3s_config_path }}"
@@ -155,6 +160,17 @@
       debug:
         msg: "k3s API on {{ inventory_hostname }}: {{ etcd_health_after.status }}"
 
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+      when: etcd_metrics_check is failed
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post etcd metrics enable on {{ inventory_hostname }}"
+
     - name: Confirm etcd metrics are working
       debug:
-        msg: "✅ {{ inventory_hostname }} — etcd metrics exposed on port {{ etcd_metrics_port }}, cluster healthy"
+        msg: "{{ inventory_hostname }} — etcd metrics exposed on port {{ etcd_metrics_port }}, cluster healthy"

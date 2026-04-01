@@ -38,7 +38,7 @@
     snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
     tmpfs_size: "1G"
     etcd_version: "v3.5.21"
-    etcdctl_path: /tmp/etcdctl
+    etcdctl_path: /usr/local/bin/etcdctl
     etcd_certs: >-
       --endpoints=https://127.0.0.1:2379
       --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
@@ -67,7 +67,7 @@
     - name: SAFETY — refuse to run on multiple hosts simultaneously
       assert:
         that:
-          - ansible_play_hosts | length == 1 or serial is defined
+          - ansible_play_batch | length == 1
         fail_msg: |
           =============================================
           REFUSING TO RUN ON MULTIPLE HOSTS AT ONCE!
@@ -76,6 +76,11 @@
           will break quorum and take down the cluster.
           =============================================
       run_once: false
+
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "etcd tmpfs migration on {{ inventory_hostname }}"
 
     - name: Check if tmpfs is already mounted on etcd data dir
       shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
@@ -397,6 +402,17 @@
           echo "     sudo systemctl start k3s"
           echo "     (They will rejoin from this node automatically)"
           echo ""
+
+    # --- Post-flight: wait for node and verify cluster ---
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post etcd tmpfs migration on {{ inventory_hostname }}"
 
     - name: Confirm migration complete
       debug:

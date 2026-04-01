@@ -1,0 +1,73 @@
+---
+# Reusable cluster health gate
+#
+# Include before and after any disruptive operation (k3s restart, etcd migration, etc.)
+# Fails if any node is already NotReady, preventing cascading failures.
+#
+# Usage:
+#   - name: Pre-flight health check
+#     ansible.builtin.include_tasks: tasks/check-cluster-health.yml
+#
+# Optional variables:
+#   health_check_context: "string describing what operation is about to happen"
+#   skip_health_check: true  (bypass — only for recovery/force playbooks)
+
+- name: Skip health check if explicitly bypassed
+  ansible.builtin.debug:
+    msg: "Health check SKIPPED (skip_health_check=true)"
+  when: skip_health_check | default(false) | bool
+
+- name: Run cluster health checks
+  when: not (skip_health_check | default(false) | bool)
+  block:
+    - name: Get node status from k3s
+      ansible.builtin.command: kubectl get nodes -o json
+      register: node_status
+      delegate_to: "{{ groups['controllers'][0] }}"
+      changed_when: false
+      become: true
+
+    - name: Find not-ready nodes
+      ansible.builtin.set_fact:
+        not_ready_list: >-
+          {% set ns = namespace(bad=[]) %}
+          {% for node in (node_status.stdout | from_json)['items'] %}
+          {%   set ready = 'Unknown' %}
+          {%   for cond in node.status.conditions | default([]) %}
+          {%     if cond.type == 'Ready' %}{% set ready = cond.status %}{% endif %}
+          {%   endfor %}
+          {%   if ready != 'True' %}
+          {%     set ns.bad = ns.bad + [node.metadata.name] %}
+          {%   endif %}
+          {% endfor %}
+          {{ ns.bad }}
+        total_nodes: "{{ (node_status.stdout | from_json)['items'] | length }}"
+
+    - name: "ABORT: Node(s) already NotReady"
+      ansible.builtin.fail:
+        msg: |
+          ==================================================
+          CLUSTER HEALTH GATE FAILED
+          ==================================================
+          NotReady nodes: {{ not_ready_list | join(', ') }}
+          Context: {{ health_check_context | default('pre-flight check') }}
+
+          Will not proceed — taking another node offline could
+          break etcd quorum and take down the cluster.
+
+          Fix the unhealthy node(s) first, then re-run.
+          ==================================================
+      when: (not_ready_list | length) > 0
+
+    - name: Verify k3s API is responsive
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[groups['controllers'][0]]['ansible_host'] }}:6443/healthz"
+        method: GET
+        validate_certs: false
+        status_code: [200, 401]
+        timeout: 10
+      delegate_to: "{{ groups['controllers'][0] }}"
+
+    - name: Health check passed
+      ansible.builtin.debug:
+        msg: "All {{ total_nodes }} nodes Ready. Proceeding with: {{ health_check_context | default('operation') }}"

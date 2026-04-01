@@ -7,6 +7,7 @@
   hosts: agents
   become: yes
   gather_facts: yes
+  serial: 1
   tags: [k3s, agent, install]
 
   vars:
@@ -16,6 +17,19 @@
     
 
   pre_tasks:
+    # --- Cluster safety gate (skip on fresh install) ---
+    - name: Check if k3s agent is already running (pre-gate)
+      ansible.builtin.systemd:
+        name: k3s-agent
+      register: k3s_agent_pre_check
+      ignore_errors: true
+
+    - name: Pre-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "k3s agent install/update on {{ inventory_hostname }}"
+      when: k3s_agent_pre_check.status.ActiveState | default('inactive') == 'active'
+
     - name: Check if k3s agent is already running
       systemd:
         name: k3s-agent
@@ -47,14 +61,19 @@
         msg: "k3s agent already running, skipping installation. Use -e replace_cluster_bool=true to overwrite."
       when: k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool
 
-    - name: Set k3s token from environment variable
-      set_fact:
-        k3s_token: "{{ ansible_env.K3S_TOKEN }}"
-      when: ansible_env.K3S_TOKEN is defined and ansible_env.K3S_TOKEN != ""
+    - name: Use k3s_token from BWS (fetched by fetch-secrets.yml)
+      ansible.builtin.set_fact:
+        k3s_token: "{{ hostvars['localhost']['fetched_secrets']['k3s_token'] }}"
+      when:
+        - hostvars['localhost']['fetched_secrets'] is defined
+        - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
+      no_log: true
 
     - name: Validate k3s token is set (only required when replacing)
       fail:
-        msg: "k3s_token must be set when replace_cluster=true. Use -e k3s_token=your-token, set K3S_TOKEN env var, or set it in group_vars"
+        msg: |
+          k3s_token is not set. Run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
+          Or pass directly: -e k3s_token=<TOKEN>
       when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
 
   tasks:
@@ -77,7 +96,7 @@
 
     - name: Download and install k3s agent
       shell: |
-        curl -sfL https://get.k3s.io | K3S_URL=https://{{ k3s_server_ip }}:6443 K3S_TOKEN="{{ k3s_token | default(ansible_env.K3S_TOKEN) }}" INSTALL_K3S_VERSION="{{ k3s_version }}" sh -
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ k3s_server_ip }}:6443 K3S_TOKEN="{{ k3s_token }}" INSTALL_K3S_VERSION="{{ k3s_version }}" sh -
       when: not k3s_installed.stat.exists and not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
       tags: [k3s, install]
 
@@ -114,6 +133,16 @@
         timeout: 300
       tags: [k3s, wait]
 
+    # --- Post-flight: verify this node joined and cluster is healthy ---
+    - name: Wait for this node to be Ready
+      ansible.builtin.include_tasks: ../../tasks/wait-for-node-ready.yml
+      vars:
+        wait_for_node: "{{ inventory_hostname }}"
+
+    - name: Post-flight cluster health check
+      ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
+      vars:
+        health_check_context: "post k3s agent setup on {{ inventory_hostname }}"
 
   handlers:
     - name: restart k3s-agent

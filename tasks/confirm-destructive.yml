@@ -1,0 +1,32 @@
+---
+# Human confirmation gate for destructive/recovery operations.
+#
+# Usage:
+#   - name: Confirm destructive operation
+#     ansible.builtin.include_tasks: tasks/confirm-destructive.yml
+#     vars:
+#       destructive_action: "restore etcd from snapshot on {{ inventory_hostname }}"
+#       skipped_checks: "cluster health gate (nodes may be down)"
+
+- name: "Confirm: {{ destructive_action }}"
+  ansible.builtin.pause:
+    prompt: |
+
+      ============================================================
+      WARNING: DESTRUCTIVE OPERATION
+      ============================================================
+      Action: {{ destructive_action }}
+      Host:   {{ inventory_hostname }} ({{ ansible_host | default('unknown') }})
+
+      Safety checks bypassed:
+        {{ skipped_checks | default('none') }}
+
+      Type 'yes' to continue, anything else to abort.
+  register: confirm_result
+  run_once: "{{ confirm_run_once | default(true) }}"
+
+- name: Abort if not confirmed
+  ansible.builtin.fail:
+    msg: "Aborted by operator. Input was: '{{ confirm_result.user_input }}'"
+  when: confirm_result.user_input != "yes"
+  run_once: "{{ confirm_run_once | default(true) }}"

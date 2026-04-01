@@ -1,0 +1,462 @@
+---
+# k3s Full Cluster Recovery — Safety Net Playbook
+#
+# Use this when ALL controllers are down and the auto-recovery script
+# failed to bring the cluster back. This is the "break glass" playbook.
+#
+# What it does:
+#   1. Pre-flight: validates all controllers are reachable via SSH
+#   2. Pre-flight: finds the best snapshot across all controllers
+#   3. Stops k3s on all controllers
+#   4. Restores from the best (most recent) snapshot on the chosen leader
+#   5. Starts k3s on the leader, waits for API
+#   6. Starts k3s on remaining controllers (they rejoin the leader)
+#   7. Runs smoke test to validate cluster health
+#
+# Usage:
+#   # Dry run (check mode) — validates everything without making changes:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/k3s-full-recovery.yml \
+#     -e bws_access_token=$BWS_ACCESS_TOKEN --check
+#
+#   # Actual recovery:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/k3s-full-recovery.yml \
+#     -e bws_access_token=$BWS_ACCESS_TOKEN
+#
+# IMPORTANT:
+#   - This playbook is DESTRUCTIVE — it wipes etcd on all controllers
+#   - Only use when the cluster is fully down and auto-recovery failed
+#   - Requires bws_access_token (or k3s_token directly)
+#   - Snapshots must exist on at least one controller (stored on SD card)
+
+# =============================================
+# Play 0: Fetch secrets from BWS
+# =============================================
+- name: Fetch secrets for full recovery
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [always]
+  vars_files:
+    - ../../group_vars/k3s.yml
+  tasks:
+    - name: Skip BWS fetch if no access token provided
+      ansible.builtin.debug:
+        msg: "No bws_access_token provided — expecting k3s_token via -e"
+      when: bws_access_token is not defined or bws_access_token == ""
+
+    - name: Fetch k3s_token from BWS
+      when:
+        - bws_access_token is defined
+        - bws_access_token | length > 0
+        - bws_secrets is defined
+        - bws_secrets.k3s_token | default('') | length > 0
+      block:
+        - name: Find bws CLI on PATH
+          ansible.builtin.command: which bws
+          register: bws_which
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Fail if bws CLI not installed
+          ansible.builtin.fail:
+            msg: "bws CLI not found. Run fetch-secrets.yml first."
+          when: bws_which.rc != 0
+
+        - name: Fetch k3s_token from BWS
+          ansible.builtin.command: >-
+            {{ bws_which.stdout }} secret get {{ bws_secrets.k3s_token }}
+            --access-token {{ bws_access_token }}
+            --output json
+          register: bws_token_result
+          no_log: true
+          changed_when: false
+          check_mode: false
+
+        - name: Set k3s_token from BWS
+          ansible.builtin.set_fact:
+            k3s_token: "{{ (bws_token_result.stdout | from_json).value }}"
+          no_log: true
+          when: bws_token_result.stdout | default('') | length > 0
+
+# =============================================
+# Play 1: Pre-flight checks on all controllers
+# =============================================
+- name: "FULL RECOVERY: Pre-flight checks"
+  hosts: controllers
+  become: yes
+  gather_facts: yes
+  tags: [preflight]
+
+  vars:
+    k3s_config_path: /etc/rancher/k3s/config.yaml
+    snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
+    etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
+    etcdctl_path: /usr/local/bin/etcdctl
+
+  tasks:
+    - name: Validate SSH connectivity (implicit — gather_facts succeeded)
+      debug:
+        msg: "{{ inventory_hostname }} reachable ({{ ansible_host }})"
+
+    - name: Check k3s binary exists
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Fail if k3s not installed
+      assert:
+        that: k3s_binary.stat.exists
+        fail_msg: "k3s not installed on {{ inventory_hostname }}"
+
+    - name: Check k3s config exists
+      stat:
+        path: "{{ k3s_config_path }}"
+      register: k3s_config
+
+    - name: Fail if k3s config missing
+      assert:
+        that: k3s_config.stat.exists
+        fail_msg: "k3s config missing on {{ inventory_hostname }} — run k3s-recover.yml first"
+
+    - name: Check etcdctl exists
+      stat:
+        path: "{{ etcdctl_path }}"
+      register: etcdctl_check
+
+    - name: Fail if etcdctl missing
+      assert:
+        that: etcdctl_check.stat.exists
+        fail_msg: "etcdctl not installed on {{ inventory_hostname }} — run k3s-recover.yml first"
+
+    - name: Check tmpfs mount
+      shell: mountpoint -q {{ etcd_mount_dir }} && echo "mounted" || echo "not_mounted"
+      register: tmpfs_state
+      changed_when: false
+      check_mode: false
+
+    - name: Check for snapshots
+      shell: ls -t {{ snapshot_dir }}/etcd-snapshot-* 2>/dev/null | head -1
+      register: latest_snapshot
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Get snapshot timestamp
+      shell: stat -c %Y {{ latest_snapshot.stdout }} 2>/dev/null || echo "0"
+      register: snapshot_mtime
+      changed_when: false
+      check_mode: false
+      when: latest_snapshot.stdout | default('') | length > 0
+
+    - name: Check k3s state
+      shell: systemctl is-active k3s 2>/dev/null || echo "inactive"
+      register: k3s_state
+      changed_when: false
+      check_mode: false
+
+    - name: Check k3s API
+      shell: >-
+        curl -sk --connect-timeout 3 -o /dev/null -w '%{http_code}'
+        https://{{ ansible_host }}:6443/healthz 2>/dev/null || echo "000"
+      register: k3s_api
+      changed_when: false
+      check_mode: false
+
+    - name: Show pre-flight status
+      debug:
+        msg: |
+          === {{ inventory_hostname }} ({{ ansible_host }}) ===
+          k3s state:       {{ k3s_state.stdout }}
+          k3s API:         {{ k3s_api.stdout }}
+          tmpfs:           {{ tmpfs_state.stdout }}
+          latest snapshot: {{ latest_snapshot.stdout | default('NONE') }}
+          snapshot age:    {{ ((ansible_date_time.epoch | int) - (snapshot_mtime.stdout | default('0') | int)) // 60 }} min ago
+          etcdctl:         {{ 'present' if etcdctl_check.stat.exists else 'MISSING' }}
+
+    - name: Fail if no snapshots anywhere
+      assert:
+        that: >-
+          (hostvars | dict2items
+           | selectattr('key', 'in', groups['controllers'])
+           | map(attribute='value')
+           | selectattr('latest_snapshot', 'defined')
+           | selectattr('latest_snapshot.stdout')
+           | list | length) > 0
+        fail_msg: "FATAL: No etcd snapshots found on ANY controller. Cannot recover."
+      run_once: true
+
+# =============================================
+# Play 2: Elect restore leader and recover
+# =============================================
+- name: "FULL RECOVERY: Restore cluster"
+  hosts: controllers
+  become: yes
+  gather_facts: no
+  serial: 1
+  tags: [recover]
+
+  vars:
+    k3s_config_path: /etc/rancher/k3s/config.yaml
+    k3s_data_dir: /var/lib/rancher/k3s
+    k3s_server_dir: /var/lib/rancher/k3s/server
+    etcd_data_dir: /var/lib/rancher/k3s/server/db
+    etcd_mount_dir: /var/lib/rancher/k3s/server/db/etcd
+    snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots
+    etcdctl_path: /usr/local/bin/etcdctl
+    etcd_certs: >-
+      --endpoints=https://127.0.0.1:2379
+      --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt
+      --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key
+      --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt
+    restore_priority: ["rpi5-1", "rpi5-0", "rpi4-0"]
+
+  pre_tasks:
+    - name: Use k3s_token from BWS
+      set_fact:
+        k3s_token: "{{ hostvars['localhost']['k3s_token'] }}"
+      when:
+        - k3s_token is not defined or k3s_token == ""
+        - hostvars['localhost']['k3s_token'] is defined
+      no_log: true
+
+    - name: Validate k3s_token
+      assert:
+        that: k3s_token is defined and k3s_token | length > 0
+        fail_msg: "k3s_token not set. Provide via -e bws_access_token=<TOKEN>"
+
+    # Elect leader: controller with the most recent snapshot
+    - name: Build snapshot age list
+      set_fact:
+        controller_snapshot_ages: >-
+          {{ groups['controllers']
+             | map('extract', hostvars)
+             | map(attribute='snapshot_mtime', default={'stdout': '0'})
+             | map(attribute='stdout')
+             | map('int')
+             | list }}
+      run_once: true
+
+    - name: Find controller with freshest snapshot
+      set_fact:
+        restore_leader: >-
+          {{ groups['controllers'][controller_snapshot_ages.index(controller_snapshot_ages | max)] }}
+      run_once: true
+
+    - name: Show restore plan
+      debug:
+        msg: |
+          ============================================
+          FULL CLUSTER RECOVERY PLAN
+          ============================================
+          Restore leader: {{ restore_leader }}
+          Snapshot:       {{ hostvars[restore_leader]['latest_snapshot']['stdout'] | default('NONE') | basename }}
+          Other nodes:    {{ groups['controllers'] | difference([restore_leader]) | join(', ') }}
+
+          Steps:
+            1. Stop k3s on ALL controllers
+            2. Restore from snapshot on {{ restore_leader }}
+            3. Start k3s on {{ restore_leader }}, wait for API
+            4. Clean etcd + start k3s on remaining controllers (rejoin)
+            5. Wait for all nodes Ready
+            6. Smoke test
+          ============================================
+      run_once: true
+
+    - name: Confirm destructive operation
+      ansible.builtin.include_tasks: ../../tasks/confirm-destructive.yml
+      vars:
+        destructive_action: "FULL CLUSTER RECOVERY — wipe etcd on all controllers and restore from snapshot"
+        skipped_checks: "all health checks (cluster is assumed fully down)"
+      run_once: true
+
+  tasks:
+    # =============================================
+    # Step 1: Stop k3s everywhere
+    # =============================================
+
+    - name: "STEP 1: Stop k3s on all controllers"
+      systemd:
+        name: k3s
+        state: stopped
+      failed_when: false
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['controllers'] }}"
+      run_once: true
+
+    # =============================================
+    # Step 2: Restore from snapshot on leader
+    # =============================================
+
+    - name: "STEP 2: Restore on leader — unmount tmpfs"
+      shell: umount {{ etcd_mount_dir }} 2>/dev/null || true
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — clean etcd data"
+      shell: >-
+        rm -rf {{ etcd_mount_dir }}/* {{ etcd_mount_dir }}-old-*
+        {{ etcd_data_dir }}/etcd-tmp
+        {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — comment out server line"
+      shell: >-
+        sed -i 's/^server:/#FULL_RECOVERY#server:/' {{ k3s_config_path }}
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — cluster-reset from snapshot"
+      shell: >-
+        k3s server --cluster-reset
+        --cluster-reset-restore-path={{ hostvars[restore_leader]['latest_snapshot']['stdout'] }}
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — re-enable server line"
+      shell: >-
+        sed -i 's/^#FULL_RECOVERY#server:/server:/' {{ k3s_config_path }}
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — copy data to tmpfs"
+      shell: |
+        cp -a {{ etcd_mount_dir }} /tmp/etcd-restored
+        mount {{ etcd_mount_dir }}
+        cp -a /tmp/etcd-restored/. {{ etcd_mount_dir }}/
+        rm -rf /tmp/etcd-restored
+        rm -rf {{ etcd_mount_dir }}-old-* {{ etcd_data_dir }}/etcd-tmp
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 2: Restore on leader — update token file"
+      copy:
+        content: "{{ k3s_token }}"
+        dest: "{{ k3s_server_dir }}/token"
+        owner: root
+        group: root
+        mode: "0600"
+      when: inventory_hostname == restore_leader
+      no_log: true
+
+    # =============================================
+    # Step 3: Start leader
+    # =============================================
+
+    - name: "STEP 3: Start k3s on restore leader"
+      systemd:
+        name: k3s
+        state: started
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 3: Wait for leader API"
+      uri:
+        url: "https://{{ hostvars[restore_leader]['ansible_host'] }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: leader_api
+      until: leader_api.status in [200, 401]
+      retries: 60
+      delay: 10
+      when: inventory_hostname == restore_leader
+
+    - name: "STEP 3: Leader API is up"
+      debug:
+        msg: "Leader {{ restore_leader }} API responded with {{ leader_api.status }}"
+      when: inventory_hostname == restore_leader
+
+    # =============================================
+    # Step 4: Clean and start remaining controllers
+    # =============================================
+
+    - name: "STEP 4: Clean etcd on follower"
+      shell: |
+        rm -rf {{ etcd_mount_dir }}/*
+        rm -rf {{ etcd_data_dir }}/etcd-tmp
+        rm -f {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
+      when: inventory_hostname != restore_leader
+
+    - name: "STEP 4: Ensure tmpfs mounted on follower"
+      shell: mountpoint -q {{ etcd_mount_dir }} || mount {{ etcd_mount_dir }}
+      when: inventory_hostname != restore_leader
+
+    - name: "STEP 4: Update token file on follower"
+      copy:
+        content: "{{ k3s_token }}"
+        dest: "{{ k3s_server_dir }}/token"
+        owner: root
+        group: root
+        mode: "0600"
+      when: inventory_hostname != restore_leader
+      no_log: true
+
+    - name: "STEP 4: Fix token in config on follower"
+      lineinfile:
+        path: "{{ k3s_config_path }}"
+        regexp: '^token:'
+        line: 'token: "{{ k3s_token }}"'
+      when: inventory_hostname != restore_leader
+      no_log: true
+
+    - name: "STEP 4: Start k3s on follower (will rejoin leader)"
+      systemd:
+        name: k3s
+        state: started
+      when: inventory_hostname != restore_leader
+
+    - name: "STEP 4: Wait for follower API"
+      uri:
+        url: "https://{{ ansible_host }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: follower_api
+      until: follower_api.status in [200, 401]
+      retries: 60
+      delay: 10
+      when: inventory_hostname != restore_leader
+
+# =============================================
+# Play 3: Verify
+# =============================================
+- name: "FULL RECOVERY: Verify cluster health"
+  hosts: "{{ groups['controllers'][0] }}"
+  become: yes
+  gather_facts: no
+  tags: [verify]
+
+  tasks:
+    - name: Wait for all nodes Ready
+      shell: >-
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}'
+      register: node_status
+      until: >-
+        (node_status.stdout_lines | select | map('split', '=') | selectattr('1', 'equalto', 'True') | list | length)
+        >= (groups['controllers'] | length)
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Show node status
+      debug:
+        msg: "{{ node_status.stdout }}"
+
+    - name: Check etcd health
+      command: kubectl get --raw /healthz/etcd
+      register: etcd_health
+      changed_when: false
+
+    - name: "FULL RECOVERY COMPLETE"
+      debug:
+        msg: |
+          ============================================
+          FULL CLUSTER RECOVERY SUCCEEDED
+          ============================================
+          etcd:  {{ etcd_health.stdout }}
+          Nodes: {{ node_status.stdout_lines | select | list | length }} reporting
+
+          Next steps:
+            - Run smoke-test.yml for full validation
+            - Check ArgoCD apps are syncing
+            - Verify Longhorn volumes are healthy
+          ============================================

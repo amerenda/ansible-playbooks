@@ -3,6 +3,10 @@
 # This playbook orchestrates the setup of the entire k3s cluster
 # Run with: ansible-playbook -i inventory/inventory.ini all.yml
 
+- name: Fetch secrets from Bitwarden Secrets Manager
+  import_playbook: playbooks/infrastructure/fetch-secrets.yml
+  tags: [secrets, bws]
+
 - name: Prepare Raspberry Pi Nodes (includes common setup)
   import_playbook: playbooks/infrastructure/setup-rpi.yml
   tags: [bootstrap, rpi, network, longhorn, common, dns, packages, iscsi]
@@ -23,6 +27,26 @@
 - name: Post-K3s Setup
   import_playbook: playbooks/infrastructure/post-k3s.yml
   tags: [k3s, install, post-setup]
+
+# etcd on tmpfs — migrate etcd data dir to RAM disk (serial: 1, safe on running cluster)
+- name: Migrate etcd to tmpfs
+  import_playbook: playbooks/infrastructure/etcd-tmpfs.yml
+  tags: [k3s, etcd, tmpfs]
+
+# Recovery service — deploy auto-recovery for full power loss
+- name: Deploy etcd auto-recovery
+  import_playbook: playbooks/infrastructure/k3s-recover.yml
+  tags: [k3s, etcd, recover]
+
+# ArgoCD bootstrap — install ArgoCD and apply root-app
+- name: Post-K3s Setup (ArgoCD bootstrap)
+  import_playbook: playbooks/applications/post-k3s-setup.yml
+  tags: [post-setup, argocd, bootstrap]
+
+# Smoke test — validate cluster health after all k3s setup
+- name: Cluster Smoke Test
+  import_playbook: playbooks/infrastructure/smoke-test.yml
+  tags: [smoke-test, verify]
 
 # Mac Mini — standalone Docker host (OrbStack), not part of k3s cluster
 # Run standalone: ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml

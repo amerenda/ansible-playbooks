@@ -2,13 +2,15 @@
 # k3s etcd auto-recovery on boot
 # Runs before k3s.service. Handles:
 #   - Empty tmpfs after reboot (normal: peers available, do nothing)
-#   - Full power loss (no peers: priority-based restore from snapshot)
+#   - Full power loss (no peers: snapshot-recency-based restore)
 #
-# RESTORE PRIORITY: {{ restore_priority | join(' > ') }}
-# Each node waits for higher-priority nodes to restore first.
-# If a higher-priority node is down, the next one takes over.
+# LEADER ELECTION: The node with the most recent snapshot restores first.
+# With staggered snapshots (~100s apart), this minimizes data loss.
+# Tiebreaker: priority index adds 30s per rank so identical-age snapshots
+# still produce a deterministic winner.
 #
-# This node: {{ inventory_hostname }} (priority {{ restore_priority.index(inventory_hostname) + 1 }} of {{ restore_priority | length }})
+# This node: {{ inventory_hostname }} (priority index {{ restore_priority.index(inventory_hostname) }})
+# All controllers: {{ restore_priority | join(', ') }}
 #
 # Managed by ansible — do not edit manually.
 
@@ -19,7 +21,11 @@ ETCD_DATA_DIR="{{ etcd_data_dir }}"
 SNAPSHOT_DIR="{{ snapshot_dir }}"
 CONFIG="/etc/rancher/k3s/config.yaml"
 LOG_TAG="k3s-etcd-recovery"
-MY_PRIORITY={{ restore_priority.index(inventory_hostname) }}
+PRIORITY_INDEX={{ restore_priority.index(inventory_hostname) }}
+ETCDCTL="{{ etcdctl_path }}"
+ETCD_CERTS="--endpoints=https://127.0.0.1:2379 --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt"
+NODE_IP="{{ ansible_host }}"
+PEER_IPS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
 
 log() { logger -t "$LOG_TAG" "$1"; echo "$1"; }
 
@@ -41,10 +47,9 @@ log "tmpfs is empty — checking if peers are available"
 rm -rf "${ETCD_DATA_DIR}/etcd-tmp" 2>/dev/null || true
 rm -f "${ETCD_DATA_DIR}/state.db" "${ETCD_DATA_DIR}/state.db-wal" "${ETCD_DATA_DIR}/state.db-shm" 2>/dev/null || true
 
-# Check if any peer controller is reachable on port 6443
+# Check if any peer controller is reachable on port 6443 (k3s running)
 check_peers() {
-    local PEERS=({{ controller_ips | difference([ansible_host]) | join(' ') }})
-    for peer in "${PEERS[@]}"; do
+    for peer in "${PEER_IPS[@]}"; do
         if curl -sk --connect-timeout 3 "https://${peer}:6443/healthz" >/dev/null 2>&1; then
             log "Peer $peer is up — k3s will rejoin"
             return 0
@@ -53,15 +58,53 @@ check_peers() {
     return 1
 }
 
-# Check if a specific host is reachable (TCP port 22 — is it booting?)
+# Check if a specific host is reachable (k3s API or SSH)
 check_host_alive() {
     local host=$1
     curl -sk --connect-timeout 2 "https://${host}:6443/healthz" >/dev/null 2>&1 || \
     timeout 2 bash -c "echo >/dev/tcp/${host}/22" 2>/dev/null
 }
 
+# Remove stale etcd member and orphaned learners for this node from a peer.
+# Without this, k3s fails with "duplicate node name found" on rejoin.
+# Must also wipe local etcd dir to ensure completely fresh join.
+remove_stale_members() {
+    for peer in "${PEER_IPS[@]}"; do
+        local PEER_CERTS="--endpoints=https://${peer}:2379 --cert=/var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key=/var/lib/rancher/k3s/server/tls/etcd/server-client.key --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt"
+        local MEMBERS
+        # Find members matching this node's IP
+        MEMBERS=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | grep "$NODE_IP" | cut -d',' -f1) || true
+        # Find orphaned learner members (empty name from failed join attempts)
+        local LEARNERS
+        LEARNERS=$(ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member list -w simple 2>/dev/null | awk -F', ' '$3 == "" {print $1}') || true
+        local ALL_STALE="$MEMBERS $LEARNERS"
+        local removed=false
+        for member_id in $ALL_STALE; do
+            [ -z "$member_id" ] && continue
+            log "Removing stale etcd member $member_id from peer $peer"
+            if ETCDCTL_API=3 "$ETCDCTL" $PEER_CERTS member remove "$member_id" 2>&1; then
+                log "Removed member $member_id"
+                removed=true
+            else
+                log "WARNING: Failed to remove member $member_id from peer $peer"
+            fi
+        done
+        if [ "$removed" = true ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 if check_peers; then
-    log "Cleaned up stale state — k3s will handle rejoin"
+    if [ -x "$ETCDCTL" ]; then
+        remove_stale_members || log "WARNING: Could not remove stale members — k3s may fail to rejoin"
+    else
+        log "WARNING: etcdctl not found at $ETCDCTL — cannot remove stale members"
+    fi
+    # Wipe etcd dir completely for a clean join
+    rm -rf "${ETCD_MOUNT:?}"/* 2>/dev/null || true
+    log "Cleaned etcd data — k3s will rejoin fresh"
     exit 0
 fi
 
@@ -69,46 +112,45 @@ fi
 
 log "No peers reachable — full power loss detected"
 
-# Priority-based leader election:
-# Wait for higher-priority nodes. If they're alive (SSH reachable)
-# but k3s isn't up yet, they're probably restoring — keep waiting.
-# If they're not reachable at all, they're down — skip them.
-
-{% for node in restore_priority %}
-{% if node != inventory_hostname %}
-{% set node_ip = hostvars[node]['ansible_host'] %}
-# Priority {{ loop.index0 }}: {{ node }} ({{ node_ip }})
-{% if restore_priority.index(inventory_hostname) > loop.index0 %}
-WAIT_ROUNDS=0
-MAX_WAIT=36  # 36 * 5s = 3 minutes per higher-priority node
-log "Checking higher-priority node {{ node }} ({{ node_ip }})..."
-while [ $WAIT_ROUNDS -lt $MAX_WAIT ]; do
-    if check_peers; then
-        log "A peer came up — k3s will rejoin"
-        exit 0
-    fi
-    if check_host_alive "{{ node_ip }}"; then
-        log "{{ node }} is alive but k3s not ready — waiting (${WAIT_ROUNDS}/${MAX_WAIT})"
-        sleep 5
-        WAIT_ROUNDS=$((WAIT_ROUNDS + 1))
-    else
-        log "{{ node }} is not reachable — skipping (may be down)"
-        break
-    fi
+# Wait for peers to become SSH-reachable (they're booting too).
+# If a peer's k3s comes up during the wait, rejoin immediately.
+for peer_ip in "${PEER_IPS[@]}"; do
+    WAIT_ROUNDS=0
+    MAX_WAIT=36  # 36 * 5s = 3 minutes per peer
+    log "Waiting for peer $peer_ip to become reachable..."
+    while [ $WAIT_ROUNDS -lt $MAX_WAIT ]; do
+        if check_peers; then
+            log "A peer's k3s came up — will rejoin"
+            exit 0
+        fi
+        if check_host_alive "$peer_ip"; then
+            log "Peer $peer_ip is alive but k3s not ready — waiting (${WAIT_ROUNDS}/${MAX_WAIT})"
+            sleep 5
+            WAIT_ROUNDS=$((WAIT_ROUNDS + 1))
+        else
+            log "Peer $peer_ip is not reachable — skipping (may be down)"
+            break
+        fi
+    done
 done
-{% endif %}
-{% endif %}
-{% endfor %}
 
-# If we get here, check peers one more time
+# Final peer check after wait phase
 if check_peers; then
     log "Peer came up during wait — k3s will rejoin"
     exit 0
 fi
 
-# --- This node is taking over the restore ---
-
-log "All higher-priority nodes are down or timed out. Restoring from snapshot."
+# --- Snapshot-recency-based leader election ---
+#
+# Each node calculates a restore delay based on how old its latest snapshot is.
+# The node with the freshest snapshot has the shortest delay and restores first.
+# Other nodes see k3s come up during their longer delay and rejoin instead.
+#
+# delay = min(snapshot_age_seconds / 2, 180) + (priority_index * 10)
+#
+# The priority_index tiebreaker (10s per rank) ensures that if snapshots
+# have identical ages (non-staggered), a deterministic winner is chosen
+# without overriding real age differences (~50s per staggered interval).
 
 # Find latest snapshot
 LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)
@@ -118,13 +160,47 @@ if [ -z "$LATEST" ]; then
     exit 1
 fi
 
-log "Restoring from snapshot: $LATEST"
+# Calculate snapshot age
+SNAPSHOT_MTIME=$(stat -c %Y "$LATEST")
+NOW=$(date +%s)
+SNAPSHOT_AGE=$((NOW - SNAPSHOT_MTIME))
+
+# Calculate delay: fresher snapshot = shorter wait
+AGE_DELAY=$((SNAPSHOT_AGE / 2))
+if [ $AGE_DELAY -gt 180 ]; then
+    AGE_DELAY=180
+fi
+TIEBREAKER=$((PRIORITY_INDEX * 10))
+TOTAL_DELAY=$((AGE_DELAY + TIEBREAKER))
+
+log "Latest snapshot: $LATEST (${SNAPSHOT_AGE}s old)"
+log "Restore delay: ${TOTAL_DELAY}s (age-based: ${AGE_DELAY}s + tiebreaker: ${TIEBREAKER}s)"
+
+# Wait the calculated delay, checking for peers every 5s
+WAITED=0
+while [ $WAITED -lt $TOTAL_DELAY ]; do
+    if check_peers; then
+        log "Peer restored first (fresher snapshot) — k3s will rejoin"
+        exit 0
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+
+# One final check before committing to restore
+if check_peers; then
+    log "Peer restored just in time — k3s will rejoin"
+    exit 0
+fi
+
+# --- This node is restoring ---
+
+log "No peer restored during delay. Restoring from snapshot: $LATEST"
 
 # Unmount tmpfs (cluster-reset renames the etcd dir, fails on mounted tmpfs)
 umount "$ETCD_MOUNT" 2>/dev/null || true
 
 # Clean any old etcd data on the SD card (exposed after unmounting tmpfs)
-# cluster-reset needs a clean dir to write into
 rm -rf "${ETCD_MOUNT:?}"/* 2>/dev/null || true
 rm -rf "${ETCD_MOUNT}-old-"* 2>/dev/null || true
 

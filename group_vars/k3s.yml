@@ -3,6 +3,20 @@
 # Security - Set your k3s token
 # k3s_token: "your-secure-token-here"  # Uncomment and set your token
 
+# BWS (Bitwarden Secrets Manager) secret IDs
+# All UUIDs live here — fetch-secrets.yml iterates over this dict.
+# To get values: bws secret get <UUID> --access-token <TOKEN>
+bws_secrets:
+  k3s_token: "ab7a85fd-3e47-4493-8ed1-b373011bdbb0"        # k3s-dean-etcd-token
+  argocd_repo_pat: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"  # github-pat-k3s-dean-gitops (ArgoCD + CI)
+  docker_hub_token: "c5ad7fae-2f58-4a8b-9651-b413001cad7f" # docker-hub-k3s-runner-api-key
+
+# ESO (External Secrets Operator) config — not secrets, just identifiers.
+# The ESO access token is the bws_access_token passed to ansible at runtime.
+# It's the one secret that can't come from BWS (chicken-and-egg).
+bws_org_id: "a9b83b36-d37e-4532-88a4-b36f00df7f3d"         # amer.dev Bitwarden org
+bws_project_id: "6353f589-39c0-45f2-9e9c-b36f00e0c282"     # k3s project in BWS
+
 # Filesystem configuration
 # resize_rootfs: true  # Set to true to resize root filesystem to use all available space
 
