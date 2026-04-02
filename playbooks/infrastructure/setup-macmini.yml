@@ -339,6 +339,23 @@
       changed_when: false
       tags: [mini-secrets]
 
+    # ─── Komodo: Host-side stack sync (OrbStack VirtFS workaround) ────
+    - name: Install Komodo stack sync LaunchAgent
+      copy:
+        src: "{{ compose_dir }}/launchd/com.local.komodo-stack-sync.plist"
+        dest: "/Users/{{ target_user }}/Library/LaunchAgents/com.local.komodo-stack-sync.plist"
+        owner: "{{ target_user }}"
+        mode: '0644'
+        remote_src: yes
+      become: no
+      tags: [mini-komodo]
+
+    - name: Load Komodo stack sync LaunchAgent
+      shell: "launchctl load /Users/{{ target_user }}/Library/LaunchAgents/com.local.komodo-stack-sync.plist 2>/dev/null || true"
+      become: no
+      changed_when: false
+      tags: [mini-komodo]
+
     - name: Run inject-secrets.sh to populate all secrets
       shell: "bash {{ compose_dir }}/scripts/inject-secrets.sh"
       become: yes
