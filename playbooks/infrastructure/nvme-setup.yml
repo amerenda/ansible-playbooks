@@ -1,0 +1,129 @@
+---
+# Pi 5 NVMe HAT+ Setup
+#
+# Enables PCIe Gen 2 for the official Raspberry Pi M.2 HAT+ and mounts the
+# NVMe drive at {{ nvme_mount_point }} for use as Longhorn storage.
+#
+# What this does:
+#   1. Adds dtparam=pciex1 to /boot/firmware/config.txt (enables PCIe Gen 2)
+#   2. Reboots if config.txt was changed (required for PCIe to come up)
+#   3. Checks if NVMe device is present
+#   4. Formats the NVMe drive as ext4 if it has no filesystem
+#   5. Creates the mount point and mounts by UUID via /etc/fstab
+#   6. Sets permissions on the mount point
+#
+# Variables (from group_vars/rpi5_hosts.yml):
+#   nvme_device:      /dev/nvme0n1
+#   nvme_mount_point: /var/lib/longhorn-nvme
+#   nvme_fstype:      ext4
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/nvme-setup.yml
+#
+#   # Single node:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/nvme-setup.yml --limit rpi5-0
+
+- name: Configure Pi 5 NVMe HAT+
+  hosts: rpi5_hosts
+  become: yes
+  gather_facts: yes
+  tags: [nvme, pcie, storage]
+
+  tasks:
+
+    # PCIe ENABLEMENT
+    - name: Enable PCIe Gen 2 for M.2 HAT+ in config.txt
+      blockinfile:
+        path: /boot/firmware/config.txt
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - PCIe NVMe HAT+"
+        block: |
+          # Enable PCIe Gen 2 for Raspberry Pi M.2 HAT+
+          dtparam=pciex1
+        backup: yes
+      register: pcie_config_result
+      tags: [nvme, pcie]
+
+    - name: Reboot to apply PCIe config.txt changes
+      reboot:
+        msg: "Rebooting to enable PCIe for NVMe HAT+"
+        reboot_timeout: 300
+        connect_timeout: 5
+      when: pcie_config_result.changed
+      tags: [nvme, pcie, reboot]
+
+    # NVMe DEVICE CHECK
+    - name: Check that NVMe device is present
+      stat:
+        path: "{{ nvme_device }}"
+      register: nvme_device_stat
+      tags: [nvme, storage]
+
+    - name: Fail if NVMe device is not present
+      fail:
+        msg: "NVMe device {{ nvme_device }} not found on {{ inventory_hostname }}. Verify the HAT+ is seated and PCIe is enabled."
+      when: not nvme_device_stat.stat.exists
+      tags: [nvme, storage]
+
+    # FILESYSTEM
+    - name: Check if NVMe device already has a filesystem
+      command: blkid -o value -s TYPE {{ nvme_device }}
+      register: nvme_blkid
+      failed_when: false
+      changed_when: false
+      tags: [nvme, storage]
+
+    - name: Format NVMe drive as ext4 (only if no filesystem present)
+      filesystem:
+        fstype: "{{ nvme_fstype }}"
+        dev: "{{ nvme_device }}"
+        opts: "-L longhorn-nvme"
+      when: nvme_blkid.stdout == ""
+      tags: [nvme, storage]
+
+    # MOUNT POINT
+    - name: Create NVMe mount point
+      file:
+        path: "{{ nvme_mount_point }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+      tags: [nvme, storage]
+
+    # FSTAB + MOUNT (by UUID)
+    - name: Get NVMe device UUID
+      command: blkid -o value -s UUID {{ nvme_device }}
+      register: nvme_uuid
+      changed_when: false
+      tags: [nvme, storage]
+
+    - name: Mount NVMe drive and add to fstab (by UUID)
+      mount:
+        path: "{{ nvme_mount_point }}"
+        src: "UUID={{ nvme_uuid.stdout }}"
+        fstype: "{{ nvme_fstype }}"
+        opts: defaults,noatime
+        state: mounted
+      tags: [nvme, storage]
+
+    # PERMISSIONS (ensure correct after mount)
+    - name: Set permissions on NVMe mount point
+      file:
+        path: "{{ nvme_mount_point }}"
+        owner: root
+        group: root
+        mode: '0750'
+      tags: [nvme, storage]
+
+    - name: Show NVMe setup summary
+      debug:
+        msg: |
+          ========================================
+          NVMe Setup Summary for {{ inventory_hostname }}
+          ========================================
+          Device:      {{ nvme_device }}
+          UUID:        {{ nvme_uuid.stdout }}
+          Mount point: {{ nvme_mount_point }}
+          Filesystem:  {{ nvme_fstype }}
+          ========================================
+      tags: [nvme, summary]
