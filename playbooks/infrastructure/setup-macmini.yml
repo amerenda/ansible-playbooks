@@ -252,7 +252,7 @@
       stat:
         path: "{{ compose_dir }}/.git"
       register: compose_repo_check
-      tags: [mini-komodo, mini-secrets]
+      tags: [mini-komodo, mini-secrets, mini-dns]
 
     - name: Clone mac-mini-compose repo
       git:
@@ -261,14 +261,14 @@
         version: main
       become: no
       when: not compose_repo_check.stat.exists
-      tags: [mini-komodo, mini-secrets]
+      tags: [mini-komodo, mini-secrets, mini-dns]
 
     - name: Pull latest mac-mini-compose (stash local changes from secret injection)
       shell: "git -C {{ compose_dir }} stash && git -C {{ compose_dir }} pull --ff-only && git -C {{ compose_dir }} stash pop || true"
       become: no
       changed_when: false
       when: compose_repo_check.stat.exists
-      tags: [mini-komodo, mini-secrets]
+      tags: [mini-komodo, mini-secrets, mini-dns]
 
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
     # All secret injection is handled by scripts/inject-secrets.sh in the
