@@ -301,20 +301,11 @@
         {{ etcd_data_dir }}/state.db {{ etcd_data_dir }}/state.db-wal {{ etcd_data_dir }}/state.db-shm
       when: inventory_hostname == restore_leader
 
-    - name: "STEP 2: Restore on leader — comment out server line"
-      shell: >-
-        sed -i 's/^server:/#FULL_RECOVERY#server:/' {{ k3s_config_path }}
-      when: inventory_hostname == restore_leader
-
     - name: "STEP 2: Restore on leader — cluster-reset from snapshot"
       shell: >-
         k3s server --cluster-reset
         --cluster-reset-restore-path={{ hostvars[restore_leader]['latest_snapshot']['stdout'] }}
-      when: inventory_hostname == restore_leader
-
-    - name: "STEP 2: Restore on leader — re-enable server line"
-      shell: >-
-        sed -i 's/^#FULL_RECOVERY#server:/server:/' {{ k3s_config_path }}
+        --server ""
       when: inventory_hostname == restore_leader
 
     - name: "STEP 2: Restore on leader — copy data to tmpfs"
