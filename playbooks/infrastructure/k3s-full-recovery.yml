@@ -195,7 +195,6 @@
   hosts: controllers
   become: yes
   gather_facts: no
-  serial: 1
   tags: [recover]
 
   vars:
@@ -237,13 +236,11 @@
              | map(attribute='stdout')
              | map('int')
              | list }}
-      run_once: true
 
     - name: Find controller with freshest snapshot
       set_fact:
         restore_leader: >-
           {{ groups['controllers'][controller_snapshot_ages.index(controller_snapshot_ages | max)] }}
-      run_once: true
 
     - name: Show restore plan
       debug:
@@ -302,10 +299,14 @@
       when: inventory_hostname == restore_leader
 
     - name: "STEP 2: Restore on leader — cluster-reset from snapshot"
-      shell: >-
-        k3s server --cluster-reset
-        --cluster-reset-restore-path={{ hostvars[restore_leader]['latest_snapshot']['stdout'] }}
-        --server ""
+      shell: |
+        # Strip server: from config so k3s doesn't try to join a peer during cluster-reset.
+        # --server "" is not guaranteed to override the config file in all k3s versions.
+        grep -v '^server:' {{ k3s_config_path }} > /tmp/k3s-reset-config.yaml
+        k3s server --cluster-reset \
+          --cluster-reset-restore-path={{ hostvars[restore_leader]['latest_snapshot']['stdout'] }} \
+          --config /tmp/k3s-reset-config.yaml
+        rm -f /tmp/k3s-reset-config.yaml
       when: inventory_hostname == restore_leader
 
     - name: "STEP 2: Restore on leader — copy data to tmpfs"
@@ -358,6 +359,21 @@
     # =============================================
     # Step 4: Clean and start remaining controllers
     # =============================================
+
+    # Followers wait here while the leader (which may be running concurrently
+    # without serial: 1) completes its restore and starts k3s.
+    - name: "STEP 4: Wait for leader API before rejoining"
+      uri:
+        url: "https://{{ hostvars[restore_leader]['ansible_host'] }}:6443/healthz"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401]
+        timeout: 10
+      register: leader_api_preflight
+      until: leader_api_preflight.status in [200, 401]
+      retries: 60
+      delay: 10
+      when: inventory_hostname != restore_leader
 
     - name: "STEP 4: Clean etcd on follower"
       shell: |
