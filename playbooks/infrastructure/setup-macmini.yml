@@ -652,6 +652,48 @@
           Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
       tags: [mini-bluebubbles]
 
+    # ─── DNS / pf redirect ────────────────────────────────────────────────
+    # Enables IP forwarding so pf can redirect DNS traffic from en0 to the
+    # OrbStack VM (192.168.139.2) where Technitium runs. OrbStack intercepts
+    # ports 53 and 5353; pf redirects around it at the NIC level.
+    # Cutover: set DNS_PORT=53 in pf-dns-redirect.sh when ready.
+
+    - name: Enable IP forwarding persistently via /etc/sysctl.conf
+      lineinfile:
+        path: /etc/sysctl.conf
+        line: "net.inet.ip.forwarding=1"
+        create: yes
+        owner: root
+        group: wheel
+        mode: '0644'
+      become: yes
+      tags: [mini-dns]
+
+    - name: Enable IP forwarding immediately (runtime)
+      command: sysctl -w net.inet.ip.forwarding=1
+      become: yes
+      changed_when: false
+      tags: [mini-dns]
+
+    - name: Install pf-dns-redirect LaunchDaemon
+      copy:
+        src: "{{ compose_dir }}/launchd/com.local.pf-dns-redirect.plist"
+        dest: /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-dns]
+
+    - name: Load pf-dns-redirect LaunchDaemon
+      shell: |
+        launchctl unload /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || true
+        launchctl load /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
+      become: yes
+      changed_when: false
+      tags: [mini-dns]
+
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary
       debug:
