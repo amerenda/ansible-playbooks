@@ -653,19 +653,12 @@
           Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
       tags: [mini-bluebubbles]
 
-    # ─── DNS / pf redirect + socat proxy ─────────────────────────────────
+    # ─── DNS / pf redirect + Python UDP proxy ─────────────────────────────
     # pf-dns-redirect.sh: redirects UDP DNS_PORT → LAN_IP:5355 (same IP,
-    # unique port macOS delivers locally). socat-dns-proxy.sh: listens on
+    # unique port macOS delivers locally). dns-udp-proxy.py: listens on
     # :5355 and forwards UDP to OrbStack VM (192.168.139.2:5354/Technitium).
     # OrbStack already handles TCP on *:5354.
     # Cutover: set DNS_PORT=53 in pf-dns-redirect.sh when ready.
-
-    - name: Install socat (required by socat-dns-proxy)
-      community.general.homebrew:
-        name: socat
-        state: present
-      become: no
-      tags: [mini-dns]
 
     - name: Enable IP forwarding persistently via /etc/sysctl.conf
       lineinfile:
@@ -703,10 +696,10 @@
       changed_when: false
       tags: [mini-dns]
 
-    - name: Install socat-dns-proxy LaunchDaemon
+    - name: Install dns-udp-proxy LaunchDaemon
       copy:
-        src: "{{ compose_dir }}/launchd/com.local.socat-dns-proxy.plist"
-        dest: /Library/LaunchDaemons/com.local.socat-dns-proxy.plist
+        src: "{{ compose_dir }}/launchd/com.local.dns-udp-proxy.plist"
+        dest: /Library/LaunchDaemons/com.local.dns-udp-proxy.plist
         owner: root
         group: wheel
         mode: '0644'
@@ -714,10 +707,11 @@
       become: yes
       tags: [mini-dns]
 
-    - name: Load socat-dns-proxy LaunchDaemon
+    - name: Load dns-udp-proxy LaunchDaemon
       shell: |
         launchctl unload /Library/LaunchDaemons/com.local.socat-dns-proxy.plist 2>/dev/null || true
-        launchctl load /Library/LaunchDaemons/com.local.socat-dns-proxy.plist
+        launchctl unload /Library/LaunchDaemons/com.local.dns-udp-proxy.plist 2>/dev/null || true
+        launchctl load /Library/LaunchDaemons/com.local.dns-udp-proxy.plist
       become: yes
       changed_when: false
       tags: [mini-dns]
