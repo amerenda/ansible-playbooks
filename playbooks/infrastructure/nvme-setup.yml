@@ -39,7 +39,6 @@
         block: |
           # Enable PCIe Gen 2 for Raspberry Pi M.2 HAT+
           dtparam=pciex1
-        backup: yes
       register: pcie_config_result
       tags: [nvme, pcie]
 
