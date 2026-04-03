@@ -6,8 +6,17 @@
 #
 # LEADER ELECTION: The node with the most recent snapshot restores first.
 # With staggered snapshots (~100s apart), this minimizes data loss.
-# Tiebreaker: priority index adds 30s per rank so identical-age snapshots
+# Tiebreaker: priority index adds 10s per rank so identical-age snapshots
 # still produce a deterministic winner.
+#
+# FULL POWER LOSS DETECTION: Once all peers are SSH-reachable but none
+# have k3s up, we immediately declare full power loss and proceed to
+# leader election. No point waiting for k3s that can't start without
+# a restore. Max wait for peers to boot: 60s.
+#
+# RESTORE DELAY: Capped at 30s (down from 180s). Stagger between
+# snapshots is ~100s, so 30s is enough for a fresher-snapshot node
+# to win leader election ahead of a staler one.
 #
 # This node: {{ inventory_hostname }} (priority index {{ restore_priority.index(inventory_hostname) }})
 # All controllers: {{ restore_priority | join(', ') }}
@@ -112,31 +121,42 @@ fi
 
 log "No peers reachable — full power loss detected"
 
-# Wait for peers to become SSH-reachable (they're booting too).
-# If a peer's k3s comes up during the wait, rejoin immediately.
-for peer_ip in "${PEER_IPS[@]}"; do
-    WAIT_ROUNDS=0
-    MAX_WAIT=36  # 36 * 5s = 3 minutes per peer
-    log "Waiting for peer $peer_ip to become reachable..."
-    while [ $WAIT_ROUNDS -lt $MAX_WAIT ]; do
-        if check_peers; then
-            log "A peer's k3s came up — will rejoin"
-            exit 0
-        fi
-        if check_host_alive "$peer_ip"; then
-            log "Peer $peer_ip is alive but k3s not ready — waiting (${WAIT_ROUNDS}/${MAX_WAIT})"
-            sleep 5
-            WAIT_ROUNDS=$((WAIT_ROUNDS + 1))
-        else
-            log "Peer $peer_ip is not reachable — skipping (may be down)"
+# Wait for peers to boot (SSH-reachable), checking for k3s on every iteration.
+# As soon as all peers are SSH-alive but none have k3s up, we know it's a
+# full power loss — k3s can't start on any peer without a restore, so there's
+# no point waiting longer. Proceed immediately to leader election.
+# Max wait: 60s (enough for RPis to finish booting to SSH).
+
+BOOT_WAIT=0
+MAX_BOOT_WAIT=12  # 12 * 5s = 60s
+log "Waiting for peers to boot (up to 60s)..."
+
+while [ $BOOT_WAIT -lt $MAX_BOOT_WAIT ]; do
+    if check_peers; then
+        log "A peer's k3s came up — will rejoin"
+        exit 0
+    fi
+
+    all_alive=true
+    for peer_ip in "${PEER_IPS[@]}"; do
+        if ! check_host_alive "$peer_ip"; then
+            all_alive=false
             break
         fi
     done
+
+    if [ "$all_alive" = true ]; then
+        log "All peers SSH-reachable, none have k3s — full power loss confirmed"
+        break
+    fi
+
+    sleep 5
+    BOOT_WAIT=$((BOOT_WAIT + 5))
 done
 
-# Final peer check after wait phase
+# Final peer check before leader election
 if check_peers; then
-    log "Peer came up during wait — k3s will rejoin"
+    log "Peer came up during boot wait — k3s will rejoin"
     exit 0
 fi
 
@@ -146,11 +166,15 @@ fi
 # The node with the freshest snapshot has the shortest delay and restores first.
 # Other nodes see k3s come up during their longer delay and rejoin instead.
 #
-# delay = min(snapshot_age_seconds / 2, 180) + (priority_index * 10)
+# delay = min(snapshot_age_seconds / 2, 30) + (priority_index * 10)
+#
+# Cap is 30s (not 180s): stagger between snapshots is ~100s, so 30s is
+# enough for a fresher-snapshot node to beat a staler one. The 180s cap
+# was burning 3 minutes unnecessarily on every full power loss recovery.
 #
 # The priority_index tiebreaker (10s per rank) ensures that if snapshots
 # have identical ages (non-staggered), a deterministic winner is chosen
-# without overriding real age differences (~50s per staggered interval).
+# without overriding real age differences (~100s per staggered interval).
 
 # Find latest snapshot
 LATEST=$(ls -t "${SNAPSHOT_DIR}"/etcd-snapshot-* 2>/dev/null | head -1)
@@ -167,8 +191,8 @@ SNAPSHOT_AGE=$((NOW - SNAPSHOT_MTIME))
 
 # Calculate delay: fresher snapshot = shorter wait
 AGE_DELAY=$((SNAPSHOT_AGE / 2))
-if [ $AGE_DELAY -gt 180 ]; then
-    AGE_DELAY=180
+if [ $AGE_DELAY -gt 30 ]; then
+    AGE_DELAY=30
 fi
 TIEBREAKER=$((PRIORITY_INDEX * 10))
 TOTAL_DELAY=$((AGE_DELAY + TIEBREAKER))
@@ -204,18 +228,11 @@ umount "$ETCD_MOUNT" 2>/dev/null || true
 rm -rf "${ETCD_MOUNT:?}"/* 2>/dev/null || true
 rm -rf "${ETCD_MOUNT}-old-"* 2>/dev/null || true
 
-# Comment out server: line (cluster-reset refuses with it set)
-if grep -q '^server:' "$CONFIG"; then
-    sed -i 's/^server:/#AUTORECOVERY#server:/' "$CONFIG"
-fi
-
-# Run cluster-reset
-k3s server --cluster-reset --cluster-reset-restore-path="$LATEST"
-
-# Re-enable server: line
-if grep -q '^#AUTORECOVERY#server:' "$CONFIG"; then
-    sed -i 's/^#AUTORECOVERY#server:/server:/' "$CONFIG"
-fi
+# Use a temp config without server: so k3s doesn't try to join a peer
+# during cluster-reset. Safer than sed in-place — never touches the real config.
+grep -v '^server:' "$CONFIG" > /tmp/k3s-reset-config.yaml
+k3s server --cluster-reset --cluster-reset-restore-path="$LATEST" --config /tmp/k3s-reset-config.yaml
+rm -f /tmp/k3s-reset-config.yaml
 
 # Copy restored data into re-mounted tmpfs
 cp -a "$ETCD_MOUNT" /tmp/etcd-restored
