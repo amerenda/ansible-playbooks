@@ -23,6 +23,7 @@
 #   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-bluebubbles — Install BlueBubbles iMessage proxy
+#   mini-dns        — pf DNS redirect + socat UDP proxy for Technitium
 #   mini-summary    — Show setup summary
 
 - name: Setup Mac Mini M4 as Docker host
@@ -652,10 +653,11 @@
           Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
       tags: [mini-bluebubbles]
 
-    # ─── DNS / pf redirect ────────────────────────────────────────────────
-    # Enables IP forwarding so pf can redirect DNS traffic from en0 to the
-    # OrbStack VM (192.168.139.2) where Technitium runs. OrbStack intercepts
-    # ports 53 and 5353; pf redirects around it at the NIC level.
+    # ─── DNS / pf redirect + socat proxy ─────────────────────────────────
+    # pf-dns-redirect.sh: redirects UDP DNS_PORT → LAN_IP:5355 (same IP,
+    # unique port macOS delivers locally). socat-dns-proxy.sh: listens on
+    # :5355 and forwards UDP to OrbStack VM (192.168.139.2:5354/Technitium).
+    # OrbStack already handles TCP on *:5354.
     # Cutover: set DNS_PORT=53 in pf-dns-redirect.sh when ready.
 
     - name: Enable IP forwarding persistently via /etc/sysctl.conf
@@ -690,6 +692,25 @@
       shell: |
         launchctl unload /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || true
         launchctl load /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
+      become: yes
+      changed_when: false
+      tags: [mini-dns]
+
+    - name: Install socat-dns-proxy LaunchDaemon
+      copy:
+        src: "{{ compose_dir }}/launchd/com.local.socat-dns-proxy.plist"
+        dest: /Library/LaunchDaemons/com.local.socat-dns-proxy.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-dns]
+
+    - name: Load socat-dns-proxy LaunchDaemon
+      shell: |
+        launchctl unload /Library/LaunchDaemons/com.local.socat-dns-proxy.plist 2>/dev/null || true
+        launchctl load /Library/LaunchDaemons/com.local.socat-dns-proxy.plist
       become: yes
       changed_when: false
       tags: [mini-dns]
