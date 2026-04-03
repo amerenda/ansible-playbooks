@@ -660,6 +660,13 @@
     # OrbStack already handles TCP on *:5354.
     # Cutover: set DNS_PORT=53 in pf-dns-redirect.sh when ready.
 
+    - name: Install socat (required by socat-dns-proxy)
+      community.general.homebrew:
+        name: socat
+        state: present
+      become: no
+      tags: [mini-dns]
+
     - name: Enable IP forwarding persistently via /etc/sysctl.conf
       lineinfile:
         path: /etc/sysctl.conf
