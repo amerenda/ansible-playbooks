@@ -1,0 +1,56 @@
+---
+# Sysctl Tuning for k3s Nodes
+#
+# Tunes kernel parameters required for running many pods/containers.
+# Targets all k3s nodes + GPU hosts that run k3s workloads.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/sysctl-tuning.yml
+#
+#   # Single node:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/sysctl-tuning.yml --limit murderbot
+
+- name: Apply sysctl tuning for k3s nodes
+  hosts: k3s:gpu_k3s
+  become: yes
+  gather_facts: yes
+  tags: [sysctl, k3s]
+
+  vars:
+    sysctl_params:
+      # inotify — default max_user_instances (128) and max_user_watches (65536)
+      # are too low for k3s nodes running many pods with file watchers
+      fs.inotify.max_user_instances: 512
+      fs.inotify.max_user_watches: 524288
+
+  tasks:
+    - name: Configure sysctl parameters
+      copy:
+        dest: /etc/sysctl.d/99-k3s-tuning.conf
+        content: |
+          # Managed by Ansible — sysctl-tuning.yml
+          {% for key, value in sysctl_params.items() %}
+          {{ key }} = {{ value }}
+          {% endfor %}
+        owner: root
+        group: root
+        mode: '0644'
+      register: sysctl_config
+
+    - name: Apply sysctl parameters
+      command: sysctl --system
+      when: sysctl_config.changed
+      changed_when: false
+
+    - name: Verify sysctl values
+      command: sysctl {{ item.key }}
+      loop: "{{ sysctl_params | dict2items }}"
+      register: sysctl_verify
+      changed_when: false
+
+    - name: Show current values
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ sysctl_verify.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
