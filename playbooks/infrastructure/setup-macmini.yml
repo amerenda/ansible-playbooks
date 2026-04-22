@@ -354,6 +354,13 @@
       become: yes
       tags: [mini-secrets]
 
+    # ─── Shared Docker network ────────────────────────────────────────────────
+    - name: Create mac-mini-shared Docker network
+      shell: "{{ orbstack_bin }}/docker network create mac-mini-shared 2>/dev/null || true"
+      become: no
+      changed_when: false
+      tags: [mini-komodo]
+
     # ─── Komodo: Deploy ──────────────────────────────────────────────────
     - name: Create Komodo data directories
       file:
