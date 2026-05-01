@@ -270,6 +270,11 @@
       when: compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets, mini-dns]
 
+    - name: Configure native Ollama OLLAMA_HOST (Docker / host.docker.internal)
+      shell: "bash {{ compose_dir }}/scripts/configure-native-ollama-bind.sh"
+      become: no
+      tags: [mini-komodo, mini-secrets, mini-ollama, mini-dns]
+
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
     # All secret injection is handled by scripts/inject-secrets.sh in the
     # mac-mini-compose repo. This section installs prerequisites and runs
