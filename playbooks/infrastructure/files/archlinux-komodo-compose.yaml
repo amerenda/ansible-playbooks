@@ -1,0 +1,23 @@
+# Komodo Periphery for the archlinux host.
+# Bundled for Ansible when archlinux/komodo/ is not yet on origin/main.
+# Self-managed (komodo.skip): not deployed by Komodo ResourceSync.
+
+services:
+  periphery:
+    build:
+      context: .
+      dockerfile: Dockerfile.periphery
+    container_name: komodo-periphery
+    labels:
+      komodo.skip:
+    restart: unless-stopped
+    ports:
+      - "8120:8120"
+    env_file: ./compose.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/proc
+      - /etc/komodo:/etc/komodo
+      - /etc/komodo/.bws-secret:/run/secrets/bws-access-token:ro
+      - /opt/media:/opt/media
+      - /mnt/storage:/mnt/storage

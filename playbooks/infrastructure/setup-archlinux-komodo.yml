@@ -1,0 +1,376 @@
+---
+# Bootstrap the Arch Linux host as a Komodo Periphery agent for
+# amerenda/komodo-dean-gitops. After this play, Komodo Core (mac-mini-m4)
+# can deploy stacks under `archlinux/` to this host (e.g. media-server).
+#
+# Run:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/setup-archlinux-komodo.yml \
+#     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
+#
+# Tags: arch-komodo, arch-bws, arch-periphery, arch-media-dirs
+
+- name: Bootstrap Komodo Periphery on archlinux
+  hosts: archlinux_komodo_hosts
+  gather_facts: yes
+  become: yes
+  vars_files:
+    - ../../group_vars/archlinux_komodo_hosts.yml
+  vars:
+    target_user: "{{ ansible_user }}"
+    compose_dir: "/home/{{ target_user }}/komodo-dean-gitops"
+    archlinux_compose_dir: "{{ compose_dir }}/archlinux"
+    komodo_dir: "{{ archlinux_compose_dir }}/komodo"
+    komodo_etc: "/etc/komodo"
+    bws_token_file: "{{ komodo_etc }}/.bws-secret"
+
+  pre_tasks:
+    - name: Validate bws_access_token is provided
+      fail:
+        msg: |
+          bws_access_token must be provided. Run with:
+            ansible-playbook ... --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
+      when: bws_access_token is not defined or (bws_access_token | length) == 0
+
+  tasks:
+    # ─── System packages ───────────────────────────────────────────────────
+    - name: Install host packages (Docker, jq, git, curl, unzip)
+      pacman:
+        name:
+          - docker
+          - docker-compose
+          - jq
+          - git
+          - curl
+          - unzip
+        state: present
+        update_cache: yes
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Add target user to docker group
+      user:
+        name: "{{ target_user }}"
+        groups: docker
+        append: yes
+      tags: [arch-komodo, arch-periphery]
+
+    # ─── bws CLI on host (also used to render compose.env) ─────────────────
+    - name: Detect host architecture for bws CLI
+      set_fact:
+        bws_target: "{{ 'aarch64-unknown-linux-gnu' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64-unknown-linux-gnu' }}"
+      tags: [arch-komodo, arch-bws]
+
+    - name: Check if bws CLI is already installed
+      stat:
+        path: /usr/local/bin/bws
+      register: bws_check
+      tags: [arch-komodo, arch-bws]
+
+    - name: Install bws CLI
+      unarchive:
+        src: "https://github.com/bitwarden/sdk-sm/releases/download/bws-v{{ bws_version }}/bws-{{ bws_target }}-{{ bws_version }}.zip"
+        dest: /usr/local/bin/
+        remote_src: yes
+        mode: "0755"
+      when: not bws_check.stat.exists
+      tags: [arch-komodo, arch-bws]
+
+    # ─── BWS access token on disk ──────────────────────────────────────────
+    - name: Ensure /etc/komodo exists
+      file:
+        path: "{{ komodo_etc }}"
+        state: directory
+        mode: "0755"
+      tags: [arch-komodo, arch-bws, arch-periphery]
+
+    - name: Write BWS access token (mode 0600)
+      copy:
+        content: "{{ bws_access_token }}"
+        dest: "{{ bws_token_file }}"
+        mode: "0600"
+        owner: root
+        group: root
+      no_log: true
+      tags: [arch-komodo, arch-bws, arch-periphery]
+
+    # ─── komodo-dean-gitops checkout ──────────────────────────────────────
+    - name: Check if komodo-dean-gitops repo exists
+      stat:
+        path: "{{ compose_dir }}/.git"
+      register: compose_repo_check
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    - name: Clone komodo-dean-gitops
+      git:
+        repo: "{{ compose_repo }}"
+        dest: "{{ compose_dir }}"
+        version: main
+      become: no
+      when: not compose_repo_check.stat.exists
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    - name: Pull latest komodo-dean-gitops
+      shell: "git -C {{ compose_dir }} pull --ff-only"
+      become: no
+      changed_when: false
+      when: compose_repo_check.stat.exists
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    # If origin/main does not yet contain archlinux/komodo/, the path is missing
+    # after clone. copy: will not create parent dirs — create them explicitly.
+    # become: false so new dirs under ~ are owned by the login user (not root).
+    - name: Ensure archlinux/komodo directory exists
+      ansible.builtin.file:
+        path: "{{ komodo_dir }}"
+        state: directory
+        mode: "0755"
+      become: false
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    # If compose.env.example is still missing (stale main), seed from the copy
+    # bundled with this playbook only when absent (force: no).
+    - name: Ensure archlinux/komodo/compose.env.example exists
+      ansible.builtin.copy:
+        src: archlinux-komodo-compose.env.example
+        dest: "{{ komodo_dir }}/compose.env.example"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        force: false
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    # docker compose requires compose.yaml (or docker-compose.yml) in chdir;
+    # seed from playbook when repo main does not yet include archlinux/komodo/.
+    - name: Ensure archlinux/komodo/compose.yaml exists
+      ansible.builtin.copy:
+        src: archlinux-komodo-compose.yaml
+        dest: "{{ komodo_dir }}/compose.yaml"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        force: false
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    - name: Ensure archlinux/komodo/Dockerfile.periphery exists
+      ansible.builtin.copy:
+        src: archlinux-komodo-Dockerfile.periphery
+        dest: "{{ komodo_dir }}/Dockerfile.periphery"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        force: false
+      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+
+    # ─── Render Periphery compose.env from BWS ─────────────────────────────
+    # Do not use sed for passkey injection: Komodo passkeys often contain
+    # characters that break sed. Python str.replace is safe.
+    #
+    # bws secret get can return: a JSON object, a one-element JSON array, or
+    # (some builds) log lines before the JSON on stdout — we trim to the first
+    # `{` or `[` and unwrap .value / .data.value / .[0].value. Passkey is never
+    # printed; on failure we log shapes and bws stderr only (no_log: false).
+    - name: Render archlinux/komodo/compose.env from compose.env.example
+      shell: |
+        set -euo pipefail
+        python3 <<'PY'
+        import json
+        import os
+        import pathlib
+        import subprocess
+        import sys
+
+        def first_json_blob(text: str) -> str:
+            text = text.strip()
+            if not text:
+                return text
+            for i, ch in enumerate(text):
+                if ch in "{[":
+                    return text[i:]
+            return text
+
+        def extract_passkey(data):
+            if isinstance(data, list):
+                if len(data) == 0:
+                    raise ValueError("bws returned empty JSON array")
+                if len(data) != 1:
+                    raise ValueError(f"bws array has {len(data)} elements (expected 1)")
+                data = data[0]
+            if not isinstance(data, dict):
+                raise ValueError(f"bws payload is {type(data).__name__}, not object/array")
+
+            def pick(d):
+                for k in ("value", "Value"):
+                    v = d.get(k)
+                    if v is not None and str(v) != "":
+                        return str(v)
+                return None
+
+            v = pick(data)
+            if v is not None:
+                return v
+            inner = data.get("data")
+            if isinstance(inner, dict):
+                v = pick(inner)
+                if v is not None:
+                    return v
+            inner = data.get("secret")
+            if isinstance(inner, dict):
+                v = pick(inner)
+                if v is not None:
+                    return v
+            raise ValueError(f"no .value in JSON; top-level keys: {list(data.keys())}")
+
+        token_path = pathlib.Path("{{ bws_token_file }}")
+        example_path = pathlib.Path("{{ komodo_dir }}/compose.env.example")
+        out_path = pathlib.Path("{{ komodo_dir }}/compose.env")
+        bws_bin = "/usr/local/bin/bws"
+        secret_uuid = "{{ komodo_periphery_passkey_bws_uuid }}"
+        marker = "ANSIBLE_WILL_REPLACE_THIS"
+
+        if not example_path.is_file():
+            sys.stderr.write(f"missing template: {example_path}\n")
+            sys.exit(1)
+
+        token = token_path.read_text().strip()
+        proc = subprocess.run(
+            [bws_bin, "secret", "get", secret_uuid, "--access-token", token],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            sys.stderr.write("bws secret get failed (stderr below; stdout may be empty)\n")
+            sys.stderr.write((proc.stderr or "").strip() + "\n")
+            if (proc.stdout or "").strip():
+                sys.stderr.write("bws stdout (first 400 chars, may be error JSON):\n")
+                sys.stderr.write((proc.stdout or "")[:400] + "\n")
+            sys.exit(proc.returncode)
+
+        raw_out = (proc.stdout or "").strip()
+        raw_err = (proc.stderr or "").strip()
+        blob = raw_out
+        if blob and blob.lstrip()[0] not in "{[":
+            blob = raw_err if raw_err and raw_err.lstrip()[:1] in "{[" else raw_out
+        blob = first_json_blob(blob)
+        if not blob:
+            sys.stderr.write("bws returned empty stdout/stderr after successful exit\n")
+            sys.exit(1)
+        try:
+            data = json.loads(blob)
+        except json.JSONDecodeError as exc:
+            sys.stderr.write(f"JSON parse error: {exc}\n")
+            sys.stderr.write(f"snippet (first 200 chars): {blob[:200]!r}\n")
+            sys.exit(1)
+        try:
+            passkey = extract_passkey(data)
+        except ValueError as exc:
+            sys.stderr.write(f"{exc}\n")
+            sys.exit(1)
+        if passkey in ("", "null"):
+            sys.stderr.write("resolved passkey is empty\n")
+            sys.exit(1)
+
+        example = example_path.read_text(encoding="utf-8")
+        if marker not in example:
+            sys.stderr.write(
+                f"placeholder {marker!r} missing from {example_path}\n"
+            )
+            sys.exit(1)
+        out_path.write_text(example.replace(marker, passkey), encoding="utf-8")
+        os.chmod(out_path, 0o600)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+      tags: [arch-komodo, arch-periphery]
+
+    # ─── Deploy Periphery ──────────────────────────────────────────────────
+    - name: Build and start Komodo Periphery
+      shell: docker compose -f compose.yaml --env-file compose.env up -d --build
+      args:
+        chdir: "{{ komodo_dir }}"
+      register: periphery_up
+      changed_when: "'Started' in periphery_up.stdout or 'Created' in periphery_up.stdout or 'Recreated' in periphery_up.stdout"
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Wait for Periphery to listen on :8120
+      wait_for:
+        host: 127.0.0.1
+        port: 8120
+        timeout: 60
+      tags: [arch-komodo, arch-periphery]
+
+    # ─── Media-server host directories ─────────────────────────────────────
+    - name: Pre-create media-server config dirs (owner 1000:1000)
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "1000"
+        group: "1000"
+        mode: "0755"
+      loop:
+        - "{{ media_config_root }}"
+        - "{{ media_config_root }}/profilarr/config"
+        - "{{ media_config_root }}/whisparr/config"
+        - "{{ media_config_root }}/radarr/config"
+        - "{{ media_config_root }}/bazarr/config"
+        - "{{ media_config_root }}/sonarr/config"
+        - "{{ media_config_root }}/sonarr/scripts"
+        - "{{ media_config_root }}/prowlarr/config"
+        - "{{ media_config_root }}/sabnzbd/config"
+        - "{{ media_config_root }}/jellyfin/config"
+      tags: [arch-komodo, arch-media-dirs]
+
+    - name: Verify /mnt/storage is mounted (out-of-band setup required)
+      shell: mountpoint -q "{{ media_data_root }}"
+      register: storage_mount
+      changed_when: false
+      failed_when: false
+      tags: [arch-komodo, arch-media-dirs]
+
+    - name: Warn if /mnt/storage is not mounted
+      debug:
+        msg: |
+          {{ media_data_root }} is not a mountpoint. The media-server stack
+          assumes a real disk is mounted there. Set this up out of band
+          (parted/mkfs/fstab) before deploying the media-server stack.
+      when: storage_mount.rc != 0
+      tags: [arch-komodo, arch-media-dirs]
+
+    - name: Pre-create media-server data dirs (owner 1000:1000)
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "1000"
+        group: "1000"
+        mode: "0755"
+      loop:
+        - "{{ media_data_root }}/movies"
+        - "{{ media_data_root }}/tv"
+        - "{{ media_data_root }}/books"
+        - "{{ media_data_root }}/downloads"
+        - "{{ media_data_root }}/downloads/complete"
+        - "{{ media_data_root }}/downloads/incomplete"
+        - "{{ media_data_root }}/cache"
+        - "{{ media_data_root }}/cache/transcode"
+      when: storage_mount.rc == 0
+      tags: [arch-komodo, arch-media-dirs]
+
+    # ─── Summary ───────────────────────────────────────────────────────────
+    - name: Show summary
+      debug:
+        msg: |
+          Komodo Periphery is up on https://{{ archlinux_ip }}:8120
+
+          Next steps (manual, in the Komodo UI on mac-mini-m4 — or via the
+          [[server]] block in resource-sync/stacks.toml once it's added):
+            1. Add a Komodo Server resource named "archlinux" pointing at
+               https://{{ archlinux_ip }}:8120, passkey komodo-dean-passkey.
+            2. Once visible/healthy, push a media-server stack to the gitops
+               repo (archlinux/media-server/) and ResourceSync will register it.

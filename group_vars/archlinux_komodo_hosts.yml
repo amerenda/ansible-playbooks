@@ -1,0 +1,37 @@
+---
+# Group Variables for the Arch Linux Komodo Periphery host.
+# Stacks managed by Komodo (GitOps for Docker Compose) under archlinux/.
+# Compose repo: amerenda/komodo-dean-gitops (this host's stacks live in archlinux/)
+
+# Network
+archlinux_ip: "10.100.20.25"
+
+# System
+timezone: "America/New_York"
+
+# Compose paths (cloned by the playbook).
+compose_repo: "https://github.com/amerenda/komodo-dean-gitops.git"
+# `target_user` is set in the playbook (defaults to ansible_user).
+
+# bws CLI release for /usr/local/bin/bws (host-side tooling).
+bws_version: "2.0.0"
+
+# ─── Bitwarden Secrets Manager ────────────────────────────────────────────
+# Reuse the same BWS project as the Mac Mini host. Create a separate machine
+# account scoped to read access, and pass its access token via:
+#   --extra-vars "bws_access_token=<TOKEN>"
+#
+# Required secrets (project: k3s):
+#   komodo-dean-passkey            — Periphery ↔ Core auth (shared with mac-mini-m4)
+#   media-server-do-api-token      — DigitalOcean API token for media.amer.dev dyndns
+#                                    (rotate before first use; the value committed
+#                                    in the legacy media-server repo is leaked).
+komodo_periphery_passkey_bws_uuid: "239d3146-6227-4e87-a56b-b417012a693c"
+
+# Filled in once the rotated DO token is created in BWS (PR 3 / bws_secrets todo).
+media_server_do_api_token_bws_uuid: "REPLACE_WITH_NEW_BWS_UUID"
+
+# ─── Media-server host directories ────────────────────────────────────────
+# Pre-created by setup-archlinux-komodo.yml (owner 1000:1000).
+media_config_root: "/opt/media"
+media_data_root: "/mnt/storage"
