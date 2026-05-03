@@ -649,14 +649,15 @@
       when: not bluebubbles_check.stat.exists
       tags: [mini-bluebubbles]
 
-    - name: Add BlueBubbles to Login Items
-      shell: >
-        osascript -e 'tell application "System Events" to
-        make login item at end with properties
-        {path:"/Applications/BlueBubbles.app", hidden:false}'
+    # System Events over SSH often blocks forever waiting for Accessibility / a GUI
+    # prompt that never appears. Bound with perl alarm so the play does not hang.
+    - name: Add BlueBubbles to Login Items (best-effort; add manually if this times out)
+      shell: |
+        perl -e 'alarm 25; exec @ARGV' osascript -e \
+          'tell application "System Events" to make login item at end with properties {path:"/Applications/BlueBubbles.app", hidden:false}'
       become: no
       register: login_item
-      changed_when: "'exists' not in login_item.stderr"
+      changed_when: login_item.rc == 0
       failed_when: false
       tags: [mini-bluebubbles]
 
@@ -670,6 +671,7 @@
             2. System Settings > Privacy & Security > Full Disk Access > add BlueBubbles
             3. Complete the setup wizard (set server password, skip proxy)
             4. Ensure iMessage is signed in via Messages.app
+            5. If login item was not added (SSH / Accessibility): System Settings → General → Login Items → add BlueBubbles
 
           Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
       tags: [mini-bluebubbles]
