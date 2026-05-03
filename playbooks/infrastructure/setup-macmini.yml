@@ -275,6 +275,15 @@
       become: no
       tags: [mini-komodo, mini-secrets, mini-ollama, mini-dns]
 
+    - name: Write llm agent unified-memory size (host DRAM for library / scheduler fits)
+      copy:
+        dest: "{{ compose_dir }}/llm/.ansible-memory-bytes"
+        content: "{{ (ansible_memtotal_mb | int * 1048576) | string }}\n"
+        mode: "0644"
+      become: no
+      when: ansible_memtotal_mb is defined and ansible_memtotal_mb | int > 0
+      tags: [mini-komodo, mini-secrets, mini-ollama, mini-dns, macmini]
+
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
     # All secret injection is handled by scripts/inject-secrets.sh in the
     # mac-mini-compose repo. This section installs prerequisites and runs
