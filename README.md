@@ -72,6 +72,7 @@ ansible-playbooks/
 │   ├── k3s.yml                      k3s cluster vars, BWS secret UUIDs, network config
 │   ├── rpi.yml                      RPi common vars (packages, locale, timezone)
 │   ├── macmini_hosts.yml            Mac Mini specific vars
+│   ├── archlinux_komodo_hosts.yml   Komodo Periphery + media-server BWS UUIDs (archlinux)
 │   └── rpi5_hosts.yml               RPi 5 specific vars (NVMe mount points)
 ├── host_vars/                       (legacy; prefer inventory/host_vars/ with -i inventory/)
 │   └── rpi3-0.yml                   Storage-only node resource reservations
@@ -80,7 +81,8 @@ ansible-playbooks/
 ├── tasks/
 │   ├── check-cluster-health.yml     Health gate — aborts if any node is NotReady
 │   ├── wait-for-node-ready.yml      Poll until a node rejoins the cluster
-│   └── confirm-destructive.yml      Human confirmation prompt for dangerous ops
+│   ├── confirm-destructive.yml      Human confirmation prompt for dangerous ops
+│   └── archlinux-komodo-render-compose-env.yml  BWS → archlinux/komodo/compose.env (shared)
 └── playbooks/
     ├── infrastructure/
     │   ├── setup-rpi.yml            OS-level Raspberry Pi preparation
@@ -98,6 +100,7 @@ ansible-playbooks/
     │   ├── archlinux-k3s-agent.yml  Fetch BWS → Arch prereqs → k3s agent (scoped host)
     │   ├── docker-storage.yml       Move Docker data root to /mnt/storage (GPU hosts)
     │   ├── setup-macmini.yml        Mac Mini M4 Docker host setup
+    │   ├── setup-archlinux-komodo.yml  Docker + Periphery + media dirs (Komodo on archlinux)
     │   └── smoke-test.yml           End-to-end cluster health validation
     └── applications/
         └── post-k3s-setup.yml       ArgoCD bootstrap and GitOps setup
@@ -151,6 +154,11 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/smoke-test.
 # Setup Mac Mini Docker host
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
   -e bws_access_token=<TOKEN>
+
+# Komodo Periphery on archlinux (Docker, BWS, compose.env, force-recreate Periphery, media dirs)
+# First run: pass token. Re-runs: omit token if /etc/komodo/.bws-secret already exists.
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
+  --extra-vars "bws_access_token=<TOKEN>"
 ```
 
 ## Playbook Descriptions
@@ -171,7 +179,8 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmi
 | `enable-etcd-metrics.yml` | Adds `--etcd-expose-metrics=true` to k3s config | `serial: 1` + health gate |
 | `fetch-secrets.yml` | Fetches secrets from BWS and sets facts for subsequent plays | Non-disruptive |
 | `docker-storage.yml` | Moves Docker data root to `/mnt/storage` on GPU hosts | GPU hosts only |
-| `setup-macmini.yml` | OrbStack, Ollama, Komodo, Tailscale, BlueBubbles on Mac Mini | Mac Mini only |
+| `setup-macmini.yml` | OrbStack, Ollama, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
+| `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts`; first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
 | `smoke-test.yml` | Validates nodes, etcd, tmpfs, snapshots, Longhorn, ArgoCD | Read-only, safe anytime |
 
 ### Applications
@@ -305,6 +314,70 @@ tolerations:
     operator: Equal
     value: "true"
     effect: NoSchedule
+```
+
+## Komodo on archlinux (Periphery): “Invalid passkey” / login failure
+
+Komodo **Core** (mac-mini-m4) opens a TLS connection to **Periphery** on the
+Arch box (`https://10.100.20.25:8120` by default). The Core “server” resource
+passkey must match **`PERIPHERY_PASSKEYS`** in
+`~/komodo-dean-gitops/archlinux/komodo/compose.env` on Arch — both come from
+the same Bitwarden secret **`komodo-dean-passkey`** (UUID in
+`group_vars/archlinux_komodo_hosts.yml` as `komodo_periphery_passkey_bws_uuid`).
+
+### What the error means
+
+Symptoms include **“Failed to receive Login Success message”** and
+**“Invalid passkey”** in Core–Periphery traces. That is almost always a **string
+mismatch** (wrong secret, stale file, or invisible whitespace), not TLS or
+firewall.
+
+### Checklist (in order)
+
+1. **Komodo UI (Core)** — **Variables**: `KOMODO_PERIPHERY_PASSKEY` (or whatever
+   name your `[[...]]` reference uses in ResourceSync) must be the **exact**
+   same value as BWS `komodo-dean-passkey` — no leading/trailing spaces or
+   newlines. Re-paste from BWS if unsure.
+2. **Arch `compose.env`** — If `PERIPHERY_PASSKEYS` is still
+   `ANSIBLE_WILL_REPLACE_THIS`, the render step never succeeded; re-run
+   `setup-archlinux-komodo.yml` (it re-renders and force-recreates Periphery).
+3. **BWS rotation** — If `komodo-dean-passkey` was rotated in Bitwarden, Core
+   (mac-mini) and Arch Periphery must both pick up the new value: update the
+   Komodo Variable, re-inject mac-mini secrets if needed, then re-render Arch
+   `compose.env` and restart Periphery.
+4. **Same secret as mac-mini Periphery** — Arch uses the **shared**
+   `komodo-dean-passkey` (not a second passkey) unless you intentionally split
+   servers in Komodo.
+
+### Refresh Periphery / passkey (same playbook)
+
+Re-run **`setup-archlinux-komodo.yml`**. It always re-renders `compose.env` from
+BWS (trimmed passkey) and runs **`docker compose ... --force-recreate`** so the
+Periphery container reloads env.
+
+If **`/etc/komodo/.bws-secret`** already exists, you can omit
+`bws_access_token`. Pass `--extra-vars "bws_access_token=..."` when creating or
+rotating the machine-account file.
+
+```bash
+cd /path/to/ansible-playbooks
+ansible-playbook -i inventory/inventory.ini \
+  playbooks/infrastructure/setup-archlinux-komodo.yml
+# First bootstrap or token rotation:
+ansible-playbook -i inventory/inventory.ini \
+  playbooks/infrastructure/setup-archlinux-komodo.yml \
+  --extra-vars "bws_access_token=<BWS_MACHINE_ACCOUNT_TOKEN>"
+```
+
+Then in Komodo Core, **Sync** resources (or wait for poll) and confirm the
+archlinux server shows healthy.
+
+### Manual spot-check (on Arch)
+
+```bash
+# Confirm placeholder is gone (do not paste the value in chat/logs)
+grep '^PERIPHERY_PASSKEYS=' ~/komodo-dean-gitops/archlinux/komodo/compose.env | wc -c
+docker logs komodo-periphery 2>&1 | tail -30
 ```
 
 ## Notes

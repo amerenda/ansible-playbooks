@@ -1,0 +1,118 @@
+---
+# Re-render archlinux/komodo/compose.env (PERIPHERY_PASSKEYS from BWS).
+# Required vars (set by parent play): komodo_dir, bws_token_file,
+# komodo_periphery_passkey_bws_uuid (from group_vars/archlinux_komodo_hosts.yml).
+
+- name: Render archlinux/komodo/compose.env from compose.env.example
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 <<'PY'
+    import json
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    def first_json_blob(text: str) -> str:
+        text = text.strip()
+        if not text:
+            return text
+        for i, ch in enumerate(text):
+            if ch in "{[":
+                return text[i:]
+        return text
+
+    def extract_passkey(data):
+        if isinstance(data, list):
+            if len(data) == 0:
+                raise ValueError("bws returned empty JSON array")
+            if len(data) != 1:
+                raise ValueError(f"bws array has {len(data)} elements (expected 1)")
+            data = data[0]
+        if not isinstance(data, dict):
+            raise ValueError(f"bws payload is {type(data).__name__}, not object/array")
+
+        def pick(d):
+            for k in ("value", "Value"):
+                v = d.get(k)
+                if v is not None and str(v) != "":
+                    return str(v)
+            return None
+
+        v = pick(data)
+        if v is not None:
+            return v
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            v = pick(inner)
+            if v is not None:
+                return v
+        inner = data.get("secret")
+        if isinstance(inner, dict):
+            v = pick(inner)
+            if v is not None:
+                return v
+        raise ValueError(f"no .value in JSON; top-level keys: {list(data.keys())}")
+
+    token_path = pathlib.Path("{{ bws_token_file }}")
+    example_path = pathlib.Path("{{ komodo_dir }}/compose.env.example")
+    out_path = pathlib.Path("{{ komodo_dir }}/compose.env")
+    bws_bin = "/usr/local/bin/bws"
+    secret_uuid = "{{ komodo_periphery_passkey_bws_uuid }}"
+    marker = "ANSIBLE_WILL_REPLACE_THIS"
+
+    if not example_path.is_file():
+        sys.stderr.write(f"missing template: {example_path}\n")
+        sys.exit(1)
+
+    token = token_path.read_text().strip()
+    proc = subprocess.run(
+        [bws_bin, "secret", "get", secret_uuid, "--access-token", token],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write("bws secret get failed (stderr below; stdout may be empty)\n")
+        sys.stderr.write((proc.stderr or "").strip() + "\n")
+        if (proc.stdout or "").strip():
+            sys.stderr.write("bws stdout (first 400 chars, may be error JSON):\n")
+            sys.stderr.write((proc.stdout or "")[:400] + "\n")
+        sys.exit(proc.returncode)
+
+    raw_out = (proc.stdout or "").strip()
+    raw_err = (proc.stderr or "").strip()
+    blob = raw_out
+    if blob and blob.lstrip()[0] not in "{[":
+        blob = raw_err if raw_err and raw_err.lstrip()[:1] in "{[" else raw_out
+    blob = first_json_blob(blob)
+    if not blob:
+        sys.stderr.write("bws returned empty stdout/stderr after successful exit\n")
+        sys.exit(1)
+    try:
+        data = json.loads(blob)
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(f"JSON parse error: {exc}\n")
+        sys.stderr.write(f"snippet (first 200 chars): {blob[:200]!r}\n")
+        sys.exit(1)
+    try:
+        passkey = extract_passkey(data).strip()
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        sys.exit(1)
+    if passkey in ("", "null"):
+        sys.stderr.write("resolved passkey is empty\n")
+        sys.exit(1)
+
+    example = example_path.read_text(encoding="utf-8")
+    if marker not in example:
+        sys.stderr.write(
+            f"placeholder {marker!r} missing from {example_path}\n"
+        )
+        sys.exit(1)
+    out_path.write_text(example.replace(marker, passkey), encoding="utf-8")
+    os.chmod(out_path, 0o600)
+    PY
+  args:
+    executable: /bin/bash
+  changed_when: true
+  tags: [arch-komodo, arch-periphery]

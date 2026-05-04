@@ -293,6 +293,9 @@
     #
     # Secret rotation: update in BWS → run inject-secrets.sh (or reboot).
     # Komodo deploys also refresh secrets via stacks.toml pre_deploy.
+    # inject-secrets.sh trims BWS string values when writing files so
+    # komodo-dean-passkey matches archlinux Periphery (see
+    # tasks/archlinux-komodo-render-compose-env.yml on the Arch playbook).
 
     - name: Validate bws_access_token is provided
       fail:
@@ -354,6 +357,19 @@
       shell: "launchctl load /Library/LaunchDaemons/com.local.inject-secrets.plist 2>/dev/null || true"
       become: yes
       changed_when: false
+      tags: [mini-secrets]
+
+    # sync-stacks.sh (LaunchAgent) calls `sudo launchctl kickstart` after git pull
+    # on ~/komodo-dean-gitops so inject-secrets re-runs without manual SSH.
+    - name: Allow user to kickstart inject-secrets after host gitops sync (passwordless)
+      ansible.builtin.copy:
+        content: "{{ target_user }} ALL=(root) NOPASSWD: /bin/launchctl kickstart -k system/com.local.inject-secrets\n"
+        dest: "/etc/sudoers.d/{{ target_user }}-komodo-inject-kickstart"
+        owner: root
+        group: wheel
+        mode: "0440"
+        validate: "/usr/sbin/visudo -cf %s"
+      become: yes
       tags: [mini-secrets]
 
     - name: Run inject-secrets.sh to populate all secrets

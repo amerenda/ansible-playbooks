@@ -3,7 +3,15 @@
 # amerenda/komodo-dean-gitops. After this play, Komodo Core (mac-mini-m4)
 # can deploy stacks under `archlinux/` to this host (e.g. media-server).
 #
-# Run:
+# Periphery passkey: `tasks/archlinux-komodo-render-compose-env.yml` is
+# included on every run. It writes PERIPHERY_PASSKEYS from BWS
+# (komodo-dean-passkey) and strips leading/trailing whitespace so Core and
+# Periphery agree (avoids "Invalid passkey" when the secret has stray newlines).
+#
+# Re-running this playbook refreshes `compose.env` and **force-recreates** the
+# Periphery container so env changes always apply (troubleshooting Komodo).
+#
+# Run (first bootstrap needs a token; re-runs can omit it if /etc/komodo/.bws-secret exists):
 #   ansible-playbook -i inventory/inventory.ini \
 #     playbooks/infrastructure/setup-archlinux-komodo.yml \
 #     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
@@ -25,12 +33,20 @@
     bws_token_file: "{{ komodo_etc }}/.bws-secret"
 
   pre_tasks:
-    - name: Validate bws_access_token is provided
-      fail:
+    - name: Stat existing BWS token on host
+      ansible.builtin.stat:
+        path: "{{ bws_token_file }}"
+      register: bws_secret_stat
+
+    - name: Fail if no BWS token on host and none passed in
+      ansible.builtin.fail:
         msg: |
-          bws_access_token must be provided. Run with:
-            ansible-playbook ... --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
-      when: bws_access_token is not defined or (bws_access_token | length) == 0
+          For first bootstrap, pass --extra-vars "bws_access_token=<TOKEN>".
+          To re-run without passing the token, ensure {{ bws_token_file }} exists
+          (from a previous bootstrap).
+      when:
+        - not bws_secret_stat.stat.exists
+        - bws_access_token is not defined or (bws_access_token | default('') | length) == 0
 
   tasks:
     # ─── System packages ───────────────────────────────────────────────────
@@ -91,13 +107,14 @@
       tags: [arch-komodo, arch-bws, arch-periphery]
 
     - name: Write BWS access token (mode 0600)
-      copy:
+      ansible.builtin.copy:
         content: "{{ bws_access_token }}"
         dest: "{{ bws_token_file }}"
         mode: "0600"
         owner: root
         group: root
       no_log: true
+      when: bws_access_token is defined and (bws_access_token | length) > 0
       tags: [arch-komodo, arch-bws, arch-periphery]
 
     # ─── komodo-dean-gitops checkout ──────────────────────────────────────
@@ -170,140 +187,26 @@
 
     # ─── Render Periphery compose.env from BWS ─────────────────────────────
     # Do not use sed for passkey injection: Komodo passkeys often contain
-    # characters that break sed. Python str.replace is safe.
-    #
-    # bws secret get can return: a JSON object, a one-element JSON array, or
-    # (some builds) log lines before the JSON on stdout — we trim to the first
-    # `{` or `[` and unwrap .value / .data.value / .[0].value. Passkey is never
-    # printed; on failure we log shapes and bws stderr only (no_log: false).
+    # characters that break sed. Python str.replace is safe. Passkey is
+    # stripped of leading/trailing whitespace after BWS decode (avoids Core vs
+    # Periphery mismatch when the secret has a trailing newline).
     - name: Render archlinux/komodo/compose.env from compose.env.example
-      shell: |
-        set -euo pipefail
-        python3 <<'PY'
-        import json
-        import os
-        import pathlib
-        import subprocess
-        import sys
-
-        def first_json_blob(text: str) -> str:
-            text = text.strip()
-            if not text:
-                return text
-            for i, ch in enumerate(text):
-                if ch in "{[":
-                    return text[i:]
-            return text
-
-        def extract_passkey(data):
-            if isinstance(data, list):
-                if len(data) == 0:
-                    raise ValueError("bws returned empty JSON array")
-                if len(data) != 1:
-                    raise ValueError(f"bws array has {len(data)} elements (expected 1)")
-                data = data[0]
-            if not isinstance(data, dict):
-                raise ValueError(f"bws payload is {type(data).__name__}, not object/array")
-
-            def pick(d):
-                for k in ("value", "Value"):
-                    v = d.get(k)
-                    if v is not None and str(v) != "":
-                        return str(v)
-                return None
-
-            v = pick(data)
-            if v is not None:
-                return v
-            inner = data.get("data")
-            if isinstance(inner, dict):
-                v = pick(inner)
-                if v is not None:
-                    return v
-            inner = data.get("secret")
-            if isinstance(inner, dict):
-                v = pick(inner)
-                if v is not None:
-                    return v
-            raise ValueError(f"no .value in JSON; top-level keys: {list(data.keys())}")
-
-        token_path = pathlib.Path("{{ bws_token_file }}")
-        example_path = pathlib.Path("{{ komodo_dir }}/compose.env.example")
-        out_path = pathlib.Path("{{ komodo_dir }}/compose.env")
-        bws_bin = "/usr/local/bin/bws"
-        secret_uuid = "{{ komodo_periphery_passkey_bws_uuid }}"
-        marker = "ANSIBLE_WILL_REPLACE_THIS"
-
-        if not example_path.is_file():
-            sys.stderr.write(f"missing template: {example_path}\n")
-            sys.exit(1)
-
-        token = token_path.read_text().strip()
-        proc = subprocess.run(
-            [bws_bin, "secret", "get", secret_uuid, "--access-token", token],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            sys.stderr.write("bws secret get failed (stderr below; stdout may be empty)\n")
-            sys.stderr.write((proc.stderr or "").strip() + "\n")
-            if (proc.stdout or "").strip():
-                sys.stderr.write("bws stdout (first 400 chars, may be error JSON):\n")
-                sys.stderr.write((proc.stdout or "")[:400] + "\n")
-            sys.exit(proc.returncode)
-
-        raw_out = (proc.stdout or "").strip()
-        raw_err = (proc.stderr or "").strip()
-        blob = raw_out
-        if blob and blob.lstrip()[0] not in "{[":
-            blob = raw_err if raw_err and raw_err.lstrip()[:1] in "{[" else raw_out
-        blob = first_json_blob(blob)
-        if not blob:
-            sys.stderr.write("bws returned empty stdout/stderr after successful exit\n")
-            sys.exit(1)
-        try:
-            data = json.loads(blob)
-        except json.JSONDecodeError as exc:
-            sys.stderr.write(f"JSON parse error: {exc}\n")
-            sys.stderr.write(f"snippet (first 200 chars): {blob[:200]!r}\n")
-            sys.exit(1)
-        try:
-            passkey = extract_passkey(data)
-        except ValueError as exc:
-            sys.stderr.write(f"{exc}\n")
-            sys.exit(1)
-        if passkey in ("", "null"):
-            sys.stderr.write("resolved passkey is empty\n")
-            sys.exit(1)
-
-        example = example_path.read_text(encoding="utf-8")
-        if marker not in example:
-            sys.stderr.write(
-                f"placeholder {marker!r} missing from {example_path}\n"
-            )
-            sys.exit(1)
-        out_path.write_text(example.replace(marker, passkey), encoding="utf-8")
-        os.chmod(out_path, 0o600)
-        PY
-      args:
-        executable: /bin/bash
-      changed_when: true
+      ansible.builtin.include_tasks: ../../tasks/archlinux-komodo-render-compose-env.yml
       tags: [arch-komodo, arch-periphery]
 
     # ─── Deploy Periphery ──────────────────────────────────────────────────
-    - name: Build and start Komodo Periphery
-      shell: docker compose -f compose.yaml --env-file compose.env up -d --build
+    - name: Build and (re)start Komodo Periphery (force-recreate for env/passkey fixes)
+      ansible.builtin.shell: docker compose -f compose.yaml --env-file compose.env up -d --build --force-recreate
       args:
         chdir: "{{ komodo_dir }}"
-      register: periphery_up
-      changed_when: "'Started' in periphery_up.stdout or 'Created' in periphery_up.stdout or 'Recreated' in periphery_up.stdout"
+      changed_when: true
       tags: [arch-komodo, arch-periphery]
 
     - name: Wait for Periphery to listen on :8120
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 8120
-        timeout: 60
+        timeout: 90
       tags: [arch-komodo, arch-periphery]
 
     # ─── Media-server host directories ─────────────────────────────────────
@@ -367,6 +270,10 @@
       debug:
         msg: |
           Komodo Periphery is up on https://{{ archlinux_ip }}:8120
+
+          If Core still shows "Invalid passkey", the Komodo Variable used for
+          the archlinux server (e.g. [[KOMODO_PERIPHERY_PASSKEY]]) must match
+          BWS komodo-dean-passkey exactly — this playbook only fixes Periphery's side.
 
           Next steps (manual, in the Komodo UI on mac-mini-m4 — or via the
           [[server]] block in resource-sync/stacks.toml once it's added):
