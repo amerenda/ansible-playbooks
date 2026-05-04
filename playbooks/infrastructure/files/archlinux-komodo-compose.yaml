@@ -1,6 +1,10 @@
-# Komodo Periphery for the archlinux host.
-# Bundled for Ansible when archlinux/komodo/ is not yet on origin/main.
+# Komodo Periphery for the murderbot host (Debian).
+# Bundled for Ansible when murderbot/komodo/ is not yet on origin/main.
 # Self-managed (komodo.skip): not deployed by Komodo ResourceSync.
+#
+# name: sets the Compose project name (`docker compose ls`), not the container name.
+
+name: murderbot-periphery
 
 services:
   periphery:

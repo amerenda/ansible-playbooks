@@ -1,7 +1,7 @@
 ---
-# Bootstrap the Arch Linux host as a Komodo Periphery agent for
+# Bootstrap the murderbot (Debian) host as a Komodo Periphery agent for
 # amerenda/komodo-dean-gitops. After this play, Komodo Core (mac-mini-m4)
-# can deploy stacks under `murderbot/` from this host (e.g. media-server).
+# can deploy stacks under `murderbot/` to this host (e.g. media-server).
 #
 # Periphery passkey: `tasks/archlinux-komodo-render-compose-env.yml` is
 # included on every run. It writes PERIPHERY_PASSKEYS from BWS
@@ -13,17 +13,17 @@
 #
 # Run (first bootstrap needs a token; re-runs can omit it if /etc/komodo/.bws-secret exists):
 #   ansible-playbook -i inventory/inventory.ini \
-#     playbooks/infrastructure/setup-archlinux-komodo.yml \
+#     playbooks/infrastructure/setup-debian-komodo.yml \
 #     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
 #
-# Tags: arch-komodo, arch-bws, arch-periphery, arch-media-dirs
+# Tags: debian-komodo, debian-bws, debian-periphery, debian-media-dirs
 
-- name: Bootstrap Komodo Periphery on archlinux
-  hosts: archlinux_komodo_hosts
+- name: Bootstrap Komodo Periphery on murderbot (Debian)
+  hosts: murderbot_komodo_hosts
   gather_facts: yes
   become: yes
   vars_files:
-    - ../../group_vars/archlinux_komodo_hosts.yml
+    - ../../group_vars/murderbot_komodo_hosts.yml
   vars:
     target_user: "{{ ansible_user }}"
     compose_dir: "/home/{{ target_user }}/komodo-dean-gitops"
@@ -50,44 +50,64 @@
 
   tasks:
     # ─── System packages ───────────────────────────────────────────────────
-    - name: Install host packages (Docker, jq, git, curl, unzip)
-      pacman:
+    # Hosts previously set up with Docker CE (docker.com apt repo) keep
+    # docker-buildx-plugin / docker-compose-plugin, which own the same paths as
+    # Debian's docker-buildx and docker-compose-plugin pulled in by docker.io.
+    # Purge those first or apt fails with "trying to overwrite ... docker-buildx".
+    - name: Finish interrupted dpkg runs (safe after a failed docker.io install)
+      ansible.builtin.command: dpkg --configure -a
+      register: murderbot_dpkg_configure
+      changed_when: "'Setting up' in murderbot_dpkg_configure.stdout"
+      failed_when: false
+      tags: [debian-komodo, debian-periphery]
+
+    - name: Remove Docker Inc packages that conflict with Debian docker.io stack
+      ansible.builtin.apt:
         name:
-          - docker
-          - docker-compose
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: absent
+        purge: true
+      tags: [debian-komodo, debian-periphery]
+
+    - name: Install host packages (Docker, jq, git, curl, unzip)
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-plugin
           - jq
           - git
           - curl
           - unzip
         state: present
         update_cache: yes
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Enable and start Docker
       systemd:
         name: docker
         enabled: yes
         state: started
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Add target user to docker group
       user:
         name: "{{ target_user }}"
         groups: docker
         append: yes
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     # ─── bws CLI on host (also used to render compose.env) ─────────────────
     - name: Detect host architecture for bws CLI
       set_fact:
         bws_target: "{{ 'aarch64-unknown-linux-gnu' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64-unknown-linux-gnu' }}"
-      tags: [arch-komodo, arch-bws]
+      tags: [debian-komodo, debian-bws]
 
     - name: Check if bws CLI is already installed
       stat:
         path: /usr/local/bin/bws
       register: bws_check
-      tags: [arch-komodo, arch-bws]
+      tags: [debian-komodo, debian-bws]
 
     - name: Install bws CLI
       unarchive:
@@ -96,7 +116,7 @@
         remote_src: yes
         mode: "0755"
       when: not bws_check.stat.exists
-      tags: [arch-komodo, arch-bws]
+      tags: [debian-komodo, debian-bws]
 
     # ─── BWS access token on disk ──────────────────────────────────────────
     - name: Ensure /etc/komodo exists
@@ -104,7 +124,7 @@
         path: "{{ komodo_etc }}"
         state: directory
         mode: "0755"
-      tags: [arch-komodo, arch-bws, arch-periphery]
+      tags: [debian-komodo, debian-bws, debian-periphery]
 
     - name: Write BWS access token (mode 0600)
       ansible.builtin.copy:
@@ -115,14 +135,14 @@
         group: root
       no_log: true
       when: bws_access_token is defined and (bws_access_token | length) > 0
-      tags: [arch-komodo, arch-bws, arch-periphery]
+      tags: [debian-komodo, debian-bws, debian-periphery]
 
     # ─── komodo-dean-gitops checkout ──────────────────────────────────────
     - name: Check if komodo-dean-gitops repo exists
       stat:
         path: "{{ compose_dir }}/.git"
       register: compose_repo_check
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     - name: Clone komodo-dean-gitops
       git:
@@ -131,14 +151,14 @@
         version: main
       become: no
       when: not compose_repo_check.stat.exists
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     - name: Pull latest komodo-dean-gitops
       shell: "git -C {{ compose_dir }} pull --ff-only"
       become: no
       changed_when: false
       when: compose_repo_check.stat.exists
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     # If origin/main does not yet contain murderbot/komodo/, the path is missing
     # after clone. copy: will not create parent dirs — create them explicitly.
@@ -149,7 +169,7 @@
         state: directory
         mode: "0755"
       become: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     # If compose.env.example is still missing (stale main), seed from the copy
     # bundled with this playbook only when absent (force: no).
@@ -161,7 +181,7 @@
         group: "{{ target_user }}"
         mode: "0644"
         force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     # docker compose requires compose.yaml (or docker-compose.yml) in chdir;
     # seed from playbook when repo main does not yet include murderbot/komodo/.
@@ -173,7 +193,7 @@
         group: "{{ target_user }}"
         mode: "0644"
         force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     - name: Ensure murderbot/komodo/Dockerfile.periphery exists
       ansible.builtin.copy:
@@ -183,7 +203,7 @@
         group: "{{ target_user }}"
         mode: "0644"
         force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
+      tags: [debian-komodo, debian-periphery, debian-media-dirs]
 
     # ─── Render Periphery compose.env from BWS ─────────────────────────────
     # Do not use sed for passkey injection: Komodo passkeys often contain
@@ -192,7 +212,7 @@
     # Periphery mismatch when the secret has a trailing newline).
     - name: Render murderbot/komodo/compose.env from compose.env.example
       ansible.builtin.include_tasks: ../../tasks/archlinux-komodo-render-compose-env.yml
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     # ─── Deploy Periphery ──────────────────────────────────────────────────
     - name: Build and (re)start Komodo Periphery (force-recreate for env/passkey fixes)
@@ -200,14 +220,14 @@
       args:
         chdir: "{{ komodo_dir }}"
       changed_when: true
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Wait for Periphery to listen on :8120
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 8120
         timeout: 90
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     # ─── Media-server host directories ─────────────────────────────────────
     - name: Pre-create media-server config dirs (owner 1000:1000)
@@ -227,14 +247,14 @@
         - "{{ media_config_root }}/prowlarr/config"
         - "{{ media_config_root }}/sabnzbd/config"
         - "{{ media_config_root }}/jellyfin/config"
-      tags: [arch-komodo, arch-media-dirs]
+      tags: [debian-komodo, debian-media-dirs]
 
     - name: Verify /mnt/storage is mounted (out-of-band setup required)
       shell: mountpoint -q "{{ media_data_root }}"
       register: storage_mount
       changed_when: false
       failed_when: false
-      tags: [arch-komodo, arch-media-dirs]
+      tags: [debian-komodo, debian-media-dirs]
 
     - name: Warn if /mnt/storage is not mounted
       debug:
@@ -243,7 +263,7 @@
           assumes a real disk is mounted there. Set this up out of band
           (parted/mkfs/fstab) before deploying the media-server stack.
       when: storage_mount.rc != 0
-      tags: [arch-komodo, arch-media-dirs]
+      tags: [debian-komodo, debian-media-dirs]
 
     - name: Pre-create media-server data dirs (owner 1000:1000)
       file:
@@ -262,7 +282,7 @@
         - "{{ media_data_root }}/cache"
         - "{{ media_data_root }}/cache/transcode"
       when: storage_mount.rc == 0
-      tags: [arch-komodo, arch-media-dirs]
+      tags: [debian-komodo, debian-media-dirs]
 
     # ─── Komodo Core: sync Variable to BWS passkey (fixes "Not Okay" / Invalid passkey) ─
     # Periphery already uses komodo-dean-passkey from BWS. Core must send the same
@@ -280,7 +300,7 @@
       failed_when: false
       no_log: true
       when: komodo_core_sync_passkey | default(true)
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Fetch komodo-dean-passkey from BWS (Core Variable value)
       ansible.builtin.shell: |
@@ -294,7 +314,7 @@
       failed_when: false
       no_log: true
       when: komodo_core_sync_passkey | default(true)
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Login to Komodo Core API (admin)
       ansible.builtin.uri:
@@ -314,7 +334,7 @@
         and komodo_passkey_for_core.rc | default(1) == 0
         and (komodo_admin_for_core.stdout | default('') | length) > 0
         and (komodo_passkey_for_core.stdout | default('') | length) > 0
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: List Komodo Variables from Core
       ansible.builtin.uri:
@@ -328,13 +348,13 @@
         timeout: 30
       register: komodo_core_variables
       when: komodo_core_login is succeeded
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Find existing periphery passkey variable on Core
       ansible.builtin.set_fact:
         komodo_core_passkey_var: "{{ (komodo_core_variables.json | default([]) | selectattr('name', 'equalto', komodo_periphery_passkey_variable_name) | list) | first | default({}) }}"
       when: komodo_core_login is succeeded
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Create Komodo Variable for periphery passkey (if missing)
       ansible.builtin.uri:
@@ -354,7 +374,7 @@
         komodo_core_login is succeeded
         and komodo_core_passkey_var == {}
       no_log: true
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Update Komodo Variable to match BWS passkey (if drifted)
       ansible.builtin.uri:
@@ -373,7 +393,7 @@
         and komodo_core_passkey_var != {}
         and ((komodo_core_passkey_var.value | default('') | string) != (komodo_passkey_for_core.stdout | string))
       no_log: true
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     - name: Note when Core variable sync was skipped
       ansible.builtin.debug:
@@ -390,13 +410,13 @@
           or (komodo_passkey_for_core.stdout | default('') | length) == 0
           or komodo_core_login is failed
         )
-      tags: [arch-komodo, arch-periphery]
+      tags: [debian-komodo, debian-periphery]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Show summary
       ansible.builtin.debug:
         msg: |
-          Komodo Periphery is up on https://{{ archlinux_ip }}:8120
+          Komodo Periphery is up on https://{{ murderbot_ip }}:8120
 
           When komodo_core_sync_passkey is true (default), this playbook also logs
           into Komodo Core at {{ komodo_core_url }} and sets Variable
@@ -404,5 +424,5 @@
           value so Core matches Periphery (ResourceSync [[...]] reference).
 
           Next steps (if server still missing): in Komodo UI or resource-sync/stacks.toml,
-            1. Server in stacks.toml at https://{{ archlinux_ip }}:8120 (if still used)
+            1. Server "murderbot" in stacks.toml at https://{{ murderbot_ip }}:8120
             2. murderbot/media-server/ in git; ResourceSync registers stacks

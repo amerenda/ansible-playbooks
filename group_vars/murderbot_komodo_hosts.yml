@@ -1,10 +1,9 @@
 ---
-# Group Variables for the Arch Linux Komodo Periphery host (legacy / optional).
-# Git paths are under murderbot/ in komodo-dean-gitops; this group_vars file
-# remains for hosts still using setup-archlinux-komodo.yml (pacman).
+# Group Variables for the murderbot (Debian) Komodo Periphery host.
+# Stacks managed by Komodo (GitOps) under murderbot/ in komodo-dean-gitops.
 
 # Network
-archlinux_ip: "10.100.20.25"
+murderbot_ip: "10.100.20.19"
 
 # System
 timezone: "America/New_York"
@@ -27,9 +26,8 @@ bws_version: "2.0.0"
 #   do-dns-api-key                 — DigitalOcean API token for media.amer.dev dyndns (BWS key name)
 komodo_periphery_passkey_bws_uuid: "239d3146-6227-4e87-a56b-b417012a693c"
 
-# Komodo Core (mac-mini-m4) — LAN API used by setup-archlinux-komodo.yml to push
-# the same komodo-dean-passkey into the Core Variable referenced by ResourceSync
-# (fixes archlinux server "Not Okay" / Invalid passkey when UI variable drifted).
+# Komodo Core (mac-mini-m4) — LAN API used to push the same komodo-dean-passkey
+# into the Core Variable referenced by ResourceSync.
 komodo_core_url: "http://10.100.20.18:9120"
 komodo_core_admin_password_bws_uuid: "44e040b1-20d8-4f7e-bbfa-b417012a69f9"
 komodo_periphery_passkey_variable_name: "KOMODO_PERIPHERY_PASSKEY"
@@ -39,6 +37,6 @@ komodo_core_sync_passkey: true
 media_server_do_api_token_bws_uuid: "d043a77f-ca1e-4ac6-8cfa-b38200f7b6c9"
 
 # ─── Media-server host directories ────────────────────────────────────────
-# Pre-created by the Komodo bootstrap playbooks (owner 1000:1000).
+# Pre-created by setup-debian-komodo.yml (owner 1000:1000).
 media_config_root: "/mnt/storage/media/config"
 media_data_root: "/mnt/storage"
