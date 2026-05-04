@@ -63,6 +63,12 @@
       register: k3s_running
       ignore_errors: yes
 
+    - name: Check if k3s binary is installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+      tags: [k3s, check]
+
     - name: Use k3s_token from BWS (fetched by fetch-secrets.yml)
       ansible.builtin.set_fact:
         k3s_token: "{{ hostvars['localhost']['fetched_secrets']['k3s_token'] }}"
@@ -71,12 +77,14 @@
         - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
       no_log: true
 
-    - name: Validate k3s token is set (only required when replacing)
-      fail:
-        msg: |
-          k3s_token is not set. Run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
-          Or pass directly: -e k3s_token=<TOKEN>
-      when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
+    - name: Validate k3s token from BWS
+      ansible.builtin.assert:
+        that:
+          - k3s_token is defined
+          - k3s_token | length > 0
+        fail_msg: |
+          k3s_token must come from Bitwarden Secrets Manager. Run fetch-secrets.yml first (or all.yml), with:
+            -e bws_access_token=<BWS_ACCESS_TOKEN>
 
     - name: Check if k3s token file exists on first controller
       stat:
@@ -106,8 +114,8 @@
           To fix this, get the correct token from the first controller:
           ssh {{ ansible_host }} "sudo cat /var/lib/rancher/k3s/server/token"
           
-          Then re-run the playbook with the correct token:
-          ansible-playbook -i inventory.ini k3s-controller.yml -e k3s_token=CORRECT_TOKEN
+          Update the k3s token secret in Bitwarden Secrets Manager to match the cluster,
+          then re-run with fetch-secrets / -e bws_access_token=<BWS_ACCESS_TOKEN>.
           ========================================
       when: 
         - is_first_controller
@@ -128,12 +136,6 @@
         - "/etc/rancher/k3s"
       tags: [k3s, directories]
 
-    - name: Check if k3s is already installed
-      stat:
-        path: /usr/local/bin/k3s
-      register: k3s_installed
-      tags: [k3s, check]
-
     - name: Uninstall existing k3s (when replacing cluster)
       shell: |
         # Use official k3s uninstall script
@@ -152,6 +154,7 @@
         INSTALL_K3S_VERSION="{{ k3s_version }}" \
         INSTALL_K3S_EXEC="server --cluster-init -disable=traefik --flannel-backend none" \
         K3S_TOKEN="{{ k3s_token }}" \
+        sh -
       when: (not k3s_installed.stat.exists or (replace_cluster_bool)) and is_first_controller and not (etcd_exists.stat.exists and not replace_cluster_bool)
       tags: [k3s, install]
 

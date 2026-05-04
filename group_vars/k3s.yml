@@ -1,7 +1,6 @@
 # k3s Cluster Configuration Variables
 
-# Security - Set your k3s token
-# k3s_token: "your-secure-token-here"  # Uncomment and set your token
+# k3s cluster auth token: store only in BWS (see bws_secrets.k3s_token). Never set k3s_token here.
 
 # BWS (Bitwarden Secrets Manager) secret IDs
 # All UUIDs live here — fetch-secrets.yml iterates over this dict.

@@ -17,6 +17,11 @@
     flannel_taints:
       - "flannel.io/required=true:NoSchedule"
 
+    # archlinux: dedicated node — only pods that tolerate archlinux=true:NoSchedule schedule here
+    # (infra: flannel already tolerates all NoSchedule; add same to metallb/longhorn in GitOps values.)
+    archlinux_dedicated_label: "archlinux=true"
+    archlinux_dedicated_taint: "archlinux=true:NoSchedule"
+
   pre_tasks:
     - name: Check if k3s is installed
       stat:
@@ -111,6 +116,43 @@
       loop: "{{ flannel_taints }}"
       tags: [k3s, taints]
 
+    # ARCHLINUX DEDICATED (infra only unless pod tolerates archlinux=true:NoSchedule)
+    - name: Label archlinux dedicated node
+      shell: |
+        kubectl label node {{ inventory_hostname }} {{ archlinux_dedicated_label }} --overwrite
+      delegate_to: localhost
+      become: no
+      changed_when: false
+      when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, labels, archlinux]
+
+    - name: Remove archlinux dedicated label from other nodes
+      shell: |
+        kubectl label node {{ inventory_hostname }} archlinux- || true
+      delegate_to: localhost
+      become: no
+      changed_when: false
+      when: inventory_hostname not in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, labels, archlinux]
+
+    - name: Taint archlinux dedicated node (NoSchedule unless workload tolerates archlinux=true)
+      shell: |
+        kubectl taint node {{ inventory_hostname }} {{ archlinux_dedicated_taint }} --overwrite
+      delegate_to: localhost
+      become: no
+      changed_when: false
+      when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, taints, archlinux]
+
+    - name: Remove archlinux dedicated taint from other nodes
+      shell: |
+        kubectl taint node {{ inventory_hostname }} archlinux=true:NoSchedule- || true
+      delegate_to: localhost
+      become: no
+      changed_when: false
+      when: inventory_hostname not in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, taints, archlinux]
+
     # LONGHORN NODE SCHEDULING
     - name: Enable Longhorn scheduling on storage nodes
       shell: |
@@ -129,6 +171,59 @@
       changed_when: false
       when: inventory_hostname not in (groups['storage'] | default([]))
       tags: [k3s, longhorn, storage]
+
+    # archlinux: Longhorn default disk path on /mnt/storage (see inventory/group_vars/archlinux_k3s.yml)
+    - name: Configure Longhorn disk path on archlinux
+      when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, longhorn, archlinux]
+      delegate_to: localhost
+      become: false
+      block:
+        - name: Wait for Longhorn Node CR and disks on archlinux
+          ansible.builtin.command: >-
+            kubectl get nodes.longhorn.io {{ inventory_hostname }}
+            -n {{ longhorn_k8s_namespace | default('default') }}
+            -o json
+          register: lh_arch_node
+          until: >-
+            lh_arch_node.rc == 0
+            and lh_arch_node.stdout | length > 0
+            and (
+              (lh_arch_node.stdout | from_json).spec is defined
+              and (lh_arch_node.stdout | from_json).spec.disks is defined
+              and (lh_arch_node.stdout | from_json).spec.disks | length > 0
+            )
+          retries: 36
+          delay: 10
+          changed_when: false
+
+        - name: Resolve Longhorn disk key on archlinux
+          ansible.builtin.set_fact:
+            lh_arch_disk_name: >-
+              {{
+                'default-disk'
+                if 'default-disk' in (lh_arch_node.stdout | from_json).spec.disks
+                else ((lh_arch_node.stdout | from_json).spec.disks.keys() | list | first)
+              }}
+
+        - name: Patch Longhorn disk path to longhorn_host_disk_path
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - nodes.longhorn.io/{{ inventory_hostname }}
+              - -n
+              - "{{ longhorn_k8s_namespace | default('default') }}"
+              - --type=json
+              - -p
+              - >-
+                [{"op":"replace","path":"/spec/disks/{{ lh_arch_disk_name }}/path","value":"{{ longhorn_host_disk_path }}"}]
+          register: lh_arch_patch
+          changed_when: lh_arch_patch.rc == 0
+          failed_when: lh_arch_patch.rc != 0
+          when: >-
+            (lh_arch_node.stdout | from_json).spec.disks[lh_arch_disk_name].path | default('')
+            != longhorn_host_disk_path
 
     - name: Add rpi5 hosts labels to rpi5 hosts
       shell: |

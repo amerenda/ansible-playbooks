@@ -3,7 +3,7 @@
 
 # Server connection
 server: "https://{{ k3s_server_ip }}:6443"
-token: "{{ k3s_token | default(ansible_env.K3S_TOKEN) }}"
+token: "{{ k3s_token }}"
 
 # Node configuration
 node-name: "{{ inventory_hostname }}"

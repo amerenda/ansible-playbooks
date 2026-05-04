@@ -1,7 +1,7 @@
 ---
 # Group Variables for Mac Mini M4 (Docker host via OrbStack)
 # Services managed by Komodo (GitOps for Docker Compose)
-# Compose repo: amerenda/mac-mini-compose
+# Compose repo: amerenda/komodo-dean-gitops (this host's stacks live in mac-mini-m4/)
 
 # Network
 macmini_ip: "10.100.20.18"

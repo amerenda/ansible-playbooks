@@ -17,11 +17,16 @@
   tags: [longhorn, prereqs]
 
   vars:
-    longhorn_packages:
+    longhorn_packages_debian:
       - nfs-common
       - open-iscsi
       - cryptsetup
       - dmsetup
+    longhorn_packages_arch:
+      - nfs-utils
+      - open-iscsi
+      - cryptsetup
+      - device-mapper
 
     kernel_modules:
       - nfs
@@ -40,32 +45,76 @@
       when: not k3s_installed.stat.exists
 
   tasks:
-    - name: Install Longhorn packages
-      apt:
-        name: "{{ longhorn_packages }}"
+    - name: Install Longhorn packages (Debian / Raspberry Pi OS)
+      ansible.builtin.apt:
+        name: "{{ longhorn_packages_debian }}"
         state: present
         update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Longhorn packages (Arch Linux)
+      community.general.pacman:
+        name: "{{ longhorn_packages_arch }}"
+        state: present
+      when: ansible_distribution == 'Archlinux'
+
+    - name: Fail if OS has no Longhorn package mapping
+      ansible.builtin.fail:
+        msg: >-
+          longhorn-storage.yml: add packages for {{ ansible_distribution }}
+          (family {{ ansible_os_family }})
+      when: ansible_os_family != 'Debian' and ansible_distribution != 'Archlinux'
 
     - name: Enable and start iscsid
-      systemd:
+      ansible.builtin.systemd:
         name: iscsid
         enabled: yes
         state: started
 
-    - name: Add kernel modules to /etc/modules
-      lineinfile:
+    - name: Add kernel modules to /etc/modules (Debian family)
+      ansible.builtin.lineinfile:
         path: /etc/modules
         line: "{{ item }}"
         create: yes
+        mode: '0644'
       loop: "{{ kernel_modules }}"
+      when: ansible_os_family == 'Debian'
+
+    - name: Persist kernel modules (Arch Linux)
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/longhorn.conf
+        mode: '0644'
+        content: |
+          {{ kernel_modules | join('\n') }}
+
+      when: ansible_distribution == 'Archlinux'
 
     - name: Load kernel modules
-      modprobe:
+      community.general.modprobe:
         name: "{{ item }}"
       loop: "{{ kernel_modules }}"
 
-    - name: Verify prerequisites
-      shell: |
+    - name: Require /mnt/storage mounted for archlinux Longhorn path
+      ansible.builtin.command: mountpoint -q /mnt/storage
+      changed_when: false
+      when:
+        - inventory_hostname in (groups['archlinux_k3s'] | default([]))
+        - longhorn_host_disk_path is defined
+        - longhorn_host_disk_path is search('^/mnt/storage')
+
+    - name: Ensure Longhorn data directory on archlinux
+      ansible.builtin.file:
+        path: "{{ longhorn_host_disk_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when:
+        - inventory_hostname in (groups['archlinux_k3s'] | default([]))
+        - longhorn_host_disk_path is defined
+
+    - name: Verify prerequisites (Debian)
+      ansible.builtin.shell: |
         echo "=== Packages ==="
         dpkg -l | grep -E 'nfs-common|open-iscsi|cryptsetup|dmsetup' | awk '{print $2, $3}'
         echo "=== Kernel modules ==="
@@ -74,12 +123,33 @@
         done
         echo "=== iscsid ==="
         systemctl is-active iscsid
-      register: prereq_check
+      register: prereq_check_debian
       changed_when: false
+      when: ansible_os_family == 'Debian'
 
-    - name: Show prereq status
-      debug:
-        msg: "{{ prereq_check.stdout }}"
+    - name: Verify prerequisites (Arch Linux)
+      ansible.builtin.shell: |
+        echo "=== Packages ==="
+        pacman -Q nfs-utils open-iscsi cryptsetup device-mapper
+        echo "=== Kernel modules ==="
+        for m in nfs iscsi_tcp dm_crypt; do
+          lsmod | grep -q $m && echo "$m: loaded" || echo "$m: NOT loaded"
+        done
+        echo "=== iscsid ==="
+        systemctl is-active iscsid
+      register: prereq_check_arch
+      changed_when: false
+      when: ansible_distribution == 'Archlinux'
+
+    - name: Show prereq status (Debian)
+      ansible.builtin.debug:
+        msg: "{{ prereq_check_debian.stdout }}"
+      when: ansible_os_family == 'Debian'
+
+    - name: Show prereq status (Arch Linux)
+      ansible.builtin.debug:
+        msg: "{{ prereq_check_arch.stdout }}"
+      when: ansible_distribution == 'Archlinux'
 
 - name: Configure Longhorn node scheduling
   hosts: "{{ groups['controllers'][0] }}"
@@ -95,6 +165,7 @@
       rpi5-0: true
       rpi5-1: true
       murderbot: false
+      archlinux: true
 
   tasks:
     - name: Configure Longhorn node scheduling

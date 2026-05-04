@@ -1,0 +1,25 @@
+---
+# Arch Linux: minimal packages before curl | sh k3s install.
+# Host pattern defaults to inventory host "archlinux".
+#
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-k3s.yml
+
+- name: Arch Linux base packages for k3s
+  hosts: "{{ archlinux_k3s_host | default('archlinux') }}"
+  become: yes
+  gather_facts: yes
+  tags: [archlinux, k3s, prereqs]
+
+  tasks:
+    - name: Install k3s install-script dependencies (pacman)
+      community.general.pacman:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+      when: ansible_distribution == 'Archlinux'
+
+    - name: Note skipped non-Arch host
+      ansible.builtin.debug:
+        msg: "Skipping Arch k3s prereqs — not Arch Linux ({{ ansible_distribution }})."
+      when: ansible_distribution != 'Archlinux'

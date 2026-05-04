@@ -25,13 +25,9 @@
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-recover.yml \
 #     -e bws_access_token=<BWS_TOKEN> -e rotate_token=true
 #
-# Usage (transitional — direct token, will be removed):
-#   ansible-playbook ... -e k3s_token=<TOKEN>
+# The k3s_token value in BWS should be the cluster password (not the full K10... format).
 #
-# The k3s_token should be just the password (not the full K10... format).
-#
-# Secrets: This playbook fetches k3s_token from BWS automatically when
-# bws_access_token is provided. Direct -e k3s_token is transitional.
+# Secrets: k3s_token is always read from BWS via bws — the only extra-var allowed is bws_access_token.
 
 - name: Fetch secrets for recovery
   hosts: localhost
@@ -41,15 +37,17 @@
   vars_files:
     - ../../group_vars/k3s.yml
   tasks:
-    - name: Skip BWS fetch if no access token provided
-      ansible.builtin.debug:
-        msg: "No bws_access_token provided — expecting k3s_token via -e"
-      when: bws_access_token is not defined or bws_access_token == ""
+    - name: Require BWS access token
+      ansible.builtin.assert:
+        that:
+          - bws_access_token is defined
+          - bws_access_token | length > 0
+        fail_msg: |
+          bws_access_token is required. k3s_token is read only from Bitwarden Secrets Manager via bws:
+            -e bws_access_token=<BWS_ACCESS_TOKEN>
 
     - name: Fetch k3s_token from BWS
       when:
-        - bws_access_token is defined
-        - bws_access_token | length > 0
         - bws_secrets is defined
         - bws_secrets.k3s_token | default('') | length > 0
       block:
@@ -144,9 +142,8 @@
       assert:
         that: k3s_token is defined and k3s_token | length > 0
         fail_msg: |
-          k3s_token is not set. Provide it via BWS (preferred) or directly:
-            -e bws_access_token=<TOKEN>  (fetches from BWS)
-            -e k3s_token=<PASSWORD>      (transitional, will be removed)
+          k3s_token could not be loaded from BWS. Check bws_secrets.k3s_token in group_vars/k3s.yml
+          and run with: -e bws_access_token=<BWS_ACCESS_TOKEN>
 
     - name: Validate force_restore is used with --limit
       assert:

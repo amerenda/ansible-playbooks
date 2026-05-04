@@ -4,7 +4,7 @@
 # Run with: ansible-playbook -i inventory.ini k3s-worker.yml
 
 - name: Setup k3s Agent Node
-  hosts: agents
+  hosts: "{{ k3s_agent_hosts | default('agents') }}"
   become: yes
   gather_facts: yes
   serial: 1
@@ -54,7 +54,7 @@
           ========================================
           This will restart the k3s agent service!
           ========================================
-      when: replace_cluster_bool
+      when: replace_cluster_bool | default(false) | bool
 
     - name: Skip k3s agent installation if already running
       debug:
@@ -69,12 +69,14 @@
         - "'k3s_token' in hostvars['localhost']['fetched_secrets']"
       no_log: true
 
-    - name: Validate k3s token is set (only required when replacing)
-      fail:
-        msg: |
-          k3s_token is not set. Run fetch-secrets.yml first with -e bws_access_token=<TOKEN>
-          Or pass directly: -e k3s_token=<TOKEN>
-      when: replace_cluster_bool and (k3s_token is not defined or k3s_token == "")
+    - name: Validate k3s token from BWS
+      ansible.builtin.assert:
+        that:
+          - k3s_token is defined
+          - k3s_token | length > 0
+        fail_msg: |
+          k3s_token must come from Bitwarden Secrets Manager. Run fetch-secrets.yml first (or all.yml), with:
+            -e bws_access_token=<BWS_ACCESS_TOKEN>
 
   tasks:
     - name: Create k3s data directories

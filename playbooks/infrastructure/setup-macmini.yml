@@ -39,9 +39,10 @@
     macmini_hostname: "mac-mini-m4"
     homebrew_bin: /opt/homebrew/bin
     orbstack_bin: "/Users/{{ target_user }}/.orbstack/bin"
-    compose_repo: "https://github.com/amerenda/mac-mini-compose.git"
-    compose_dir: "/Users/{{ target_user }}/mac-mini-compose"
-    komodo_dir: "/Users/{{ target_user }}/mac-mini-compose/komodo"
+    compose_repo: "https://github.com/amerenda/komodo-dean-gitops.git"
+    compose_dir: "/Users/{{ target_user }}/komodo-dean-gitops"
+    macmini_compose_dir: "{{ compose_dir }}/mac-mini-m4"
+    komodo_dir: "{{ macmini_compose_dir }}/komodo"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -248,13 +249,13 @@
       tags: [mini-orbstack]
 
     # ─── Komodo: Clone Repo ────────────────────────────────────────────
-    - name: Check if mac-mini-compose repo exists
+    - name: Check if komodo-dean-gitops repo exists
       stat:
         path: "{{ compose_dir }}/.git"
       register: compose_repo_check
       tags: [mini-komodo, mini-secrets, mini-dns]
 
-    - name: Clone mac-mini-compose repo
+    - name: Clone komodo-dean-gitops repo
       git:
         repo: "{{ compose_repo }}"
         dest: "{{ compose_dir }}"
@@ -263,7 +264,7 @@
       when: not compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets, mini-dns]
 
-    - name: Pull latest mac-mini-compose (stash local changes from secret injection)
+    - name: Pull latest komodo-dean-gitops (stash local changes from secret injection)
       shell: "git -C {{ compose_dir }} stash && git -C {{ compose_dir }} pull --ff-only && git -C {{ compose_dir }} stash pop || true"
       become: no
       changed_when: false
@@ -271,13 +272,13 @@
       tags: [mini-komodo, mini-secrets, mini-dns]
 
     - name: Configure native Ollama OLLAMA_HOST (Docker / host.docker.internal)
-      shell: "bash {{ compose_dir }}/scripts/configure-native-ollama-bind.sh"
+      shell: "bash {{ macmini_compose_dir }}/scripts/configure-native-ollama-bind.sh"
       become: no
       tags: [mini-komodo, mini-secrets, mini-ollama, mini-dns]
 
     - name: Write llm agent unified-memory size (host DRAM for library / scheduler fits)
       copy:
-        dest: "{{ compose_dir }}/llm/.ansible-memory-bytes"
+        dest: "{{ macmini_compose_dir }}/llm/.ansible-memory-bytes"
         content: "{{ (ansible_facts['memtotal_mb'] | int * 1048576) | string }}\n"
         mode: "0644"
       become: no
@@ -286,8 +287,9 @@
 
     # ─── Bitwarden Secrets ───────────────────────────────────────────────
     # All secret injection is handled by scripts/inject-secrets.sh in the
-    # mac-mini-compose repo. This section installs prerequisites and runs
-    # the script. The same script runs at boot via LaunchDaemon.
+    # komodo-dean-gitops repo (mac-mini-m4/scripts/). This section installs
+    # prerequisites and runs the script. The same script runs at boot via
+    # LaunchDaemon.
     #
     # Secret rotation: update in BWS → run inject-secrets.sh (or reboot).
     # Komodo deploys also refresh secrets via stacks.toml pre_deploy.
@@ -339,7 +341,7 @@
 
     - name: Install inject-secrets LaunchDaemon
       copy:
-        src: "{{ compose_dir }}/launchd/com.local.inject-secrets.plist"
+        src: "{{ macmini_compose_dir }}/launchd/com.local.inject-secrets.plist"
         dest: /Library/LaunchDaemons/com.local.inject-secrets.plist
         owner: root
         group: wheel
@@ -355,7 +357,7 @@
       tags: [mini-secrets]
 
     - name: Run inject-secrets.sh to populate all secrets
-      shell: "bash {{ compose_dir }}/scripts/inject-secrets.sh"
+      shell: "bash {{ macmini_compose_dir }}/scripts/inject-secrets.sh"
       become: yes
       tags: [mini-secrets]
 
@@ -515,15 +517,15 @@
       register: resource_syncs
       tags: [mini-komodo]
 
-    - name: Create ResourceSync for mac-mini-compose
+    - name: Create ResourceSync for komodo-dean-gitops
       uri:
         url: "http://localhost:9120/write/CreateResourceSync"
         method: POST
         body_format: json
         body:
-          name: mac-mini-compose
+          name: komodo-dean-gitops
           config:
-            repo: amerenda/mac-mini-compose
+            repo: amerenda/komodo-dean-gitops
             branch: main
             resource_path:
               - "resource-sync/stacks.toml"
@@ -542,7 +544,7 @@
         method: POST
         body_format: json
         body:
-          sync: mac-mini-compose
+          sync: komodo-dean-gitops
         headers:
           Authorization: "{{ komodo_jwt }}"
         status_code: 200
@@ -702,7 +704,7 @@
 
     - name: Install pf-dns-redirect LaunchDaemon
       copy:
-        src: "{{ compose_dir }}/launchd/com.local.pf-dns-redirect.plist"
+        src: "{{ macmini_compose_dir }}/launchd/com.local.pf-dns-redirect.plist"
         dest: /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
         owner: root
         group: wheel
@@ -721,7 +723,7 @@
 
     - name: Install dns-udp-proxy LaunchDaemon
       copy:
-        src: "{{ compose_dir }}/launchd/com.local.dns-udp-proxy.plist"
+        src: "{{ macmini_compose_dir }}/launchd/com.local.dns-udp-proxy.plist"
         dest: /Library/LaunchDaemons/com.local.dns-udp-proxy.plist
         owner: root
         group: wheel

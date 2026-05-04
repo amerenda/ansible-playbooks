@@ -27,7 +27,7 @@
 # IMPORTANT:
 #   - This playbook is DESTRUCTIVE — it wipes etcd on all controllers
 #   - Only use when the cluster is fully down and auto-recovery failed
-#   - Requires bws_access_token (or k3s_token directly)
+#   - Requires bws_access_token (k3s_token is read from BWS via bws only)
 #   - Snapshots must exist on at least one controller (stored on SD card)
 
 # =============================================
@@ -41,15 +41,17 @@
   vars_files:
     - ../../group_vars/k3s.yml
   tasks:
-    - name: Skip BWS fetch if no access token provided
-      ansible.builtin.debug:
-        msg: "No bws_access_token provided — expecting k3s_token via -e"
-      when: bws_access_token is not defined or bws_access_token == ""
+    - name: Require BWS access token
+      ansible.builtin.assert:
+        that:
+          - bws_access_token is defined
+          - bws_access_token | length > 0
+        fail_msg: |
+          bws_access_token is required. k3s_token is read only from Bitwarden Secrets Manager via bws:
+            -e bws_access_token=<BWS_ACCESS_TOKEN>
 
     - name: Fetch k3s_token from BWS
       when:
-        - bws_access_token is defined
-        - bws_access_token | length > 0
         - bws_secrets is defined
         - bws_secrets.k3s_token | default('') | length > 0
       block:

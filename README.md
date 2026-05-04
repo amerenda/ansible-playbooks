@@ -11,7 +11,7 @@ Ansible playbooks for provisioning and managing a high-availability k3s cluster 
 | rpi4-0 | Controller | 10.100.20.12 | 4GB RAM, tight memory |
 | rpi3-0 | Agent (storage-only) | 10.100.20.13 | Longhorn replica node |
 | murderbot | GPU host (bare metal Docker) | 10.100.20.19 | Not part of k3s |
-| archlinux | GPU host (bare metal Docker) | 10.100.20.25 | Not part of k3s |
+| archlinux | k3s agent + GPU / Docker host | 10.100.20.25 | Joins cluster as agent; Longhorn scheduling configurable |
 | mac-mini-m4 | Docker host (OrbStack) | 10.100.20.18 | Not part of k3s |
 
 All nodes are accessed as user `alex` with SSH key `~/.ssh/alex_id_ed25519`.
@@ -20,23 +20,45 @@ All nodes are accessed as user `alex` with SSH key `~/.ssh/alex_id_ed25519`.
 
 **All secrets MUST live in Bitwarden Secrets Manager (BWS). No exceptions.**
 
-- BWS is the single source of truth for every secret used by this repo
-- Playbooks fetch secrets from BWS at runtime using a single `bws_access_token`
-- Secret UUIDs are defined in `group_vars/k3s.yml` (`bws_secrets` dict)
-- The `bws` CLI auto-installs on first run if not present
+- BWS is the single source of truth for every secret used by this repo (k3s join token, GitHub PATs, registry tokens, etc.).
+- Playbooks load those values at runtime with the `bws` CLI using **one** extra variable: `bws_access_token` (a BWS [machine-account access token](https://bitwarden.com/help/machine-accounts/) for the CLI — not a second copy of each secret).
+- Secret UUIDs are defined in `group_vars/k3s.yml` (`bws_secrets` dict). Non-secret identifiers (`bws_org_id`, `bws_project_id`) stay in git.
+- The `bws` CLI auto-installs on the control machine on first run if not present.
+- Do **not** pass cluster tokens, passwords, or PATs via `-e` or inventory; if something is secret, it belongs in BWS.
 
-The only manual input is the BWS access token itself:
+The only credential you pass Ansible is the BWS access token:
 
 ```bash
-ansible-playbook -i inventory/inventory.ini all.yml -e bws_access_token=<TOKEN>
+ansible-playbook -i inventory/inventory.ini all.yml -e bws_access_token=<BWS_ACCESS_TOKEN>
 ```
 
-## Prerequisites
+## Control machine: Arch Linux (`localhost`)
 
-- Ansible installed on your control machine
-- SSH access to all nodes (key-based, `~/.ssh/alex_id_ed25519`)
-- BWS access token from Bitwarden Secrets Manager
-- Ansible collections: `ansible-galaxy collection install -r requirements.yml`
+These playbooks are written assuming you run **`ansible-playbook` on your Arch box** (your normal user session). The **first play is always `localhost`**: it runs `bws` *here*, pulls secrets into Ansible facts, and never sends your BWS token over SSH to the cluster nodes.
+
+On the Arch control host, install tooling once:
+
+```bash
+sudo pacman -S ansible python openssh unzip curl
+cd /path/to/ansible-playbooks
+ansible-galaxy collection install -r requirements.yml
+```
+
+- **`unzip`** and **`curl`** are required if `bws` is not already on `PATH` (the play downloads the official `bws` zip from GitHub into `/usr/local/bin/bws`).
+- **`openssh`** is for reaching Pis and other remotes with the key in `inventory.ini` (`~/.ssh/alex_id_ed25519`).
+
+**k3s agent on the same machine:** Keep the real LAN `ansible_host` for `archlinux` (for example `10.100.20.25`) so k3s `node-ip` stays correct. Use **`ansible_connection=local`** for that host (set in `inventory/inventory.ini` and `inventory/host_vars/archlinux.yml` in this repo). Ansible only loads `host_vars` next to the inventory file (`inventory/host_vars/`), not a top-level `host_vars/` at repo root, when you pass `-i inventory/inventory.ini`.
+
+Do **not** set `ansible_host` to `127.0.0.1` unless you intend the node to advertise loopback to the cluster.
+
+**Driving `archlinux` from another PC over SSH:** remove `ansible_connection=local` from `inventory.ini` for `archlinux` and delete or empty `inventory/host_vars/archlinux.yml`.
+
+## Prerequisites (any control OS)
+
+- Ansible on the control machine (above: Arch packages; elsewhere: your distro’s `ansible` / `ansible-core`)
+- SSH access to remote nodes (key-based, `~/.ssh/alex_id_ed25519` per `inventory.ini`)
+- BWS machine-account access token
+- Collections: `ansible-galaxy collection install -r requirements.yml`
 
 ## Directory Structure
 
@@ -51,8 +73,10 @@ ansible-playbooks/
 │   ├── rpi.yml                      RPi common vars (packages, locale, timezone)
 │   ├── macmini_hosts.yml            Mac Mini specific vars
 │   └── rpi5_hosts.yml               RPi 5 specific vars (NVMe mount points)
-├── host_vars/
+├── host_vars/                       (legacy; prefer inventory/host_vars/ with -i inventory/)
 │   └── rpi3-0.yml                   Storage-only node resource reservations
+├── inventory/host_vars/
+│   └── archlinux.yml                local connection when control host == archlinux
 ├── tasks/
 │   ├── check-cluster-health.yml     Health gate — aborts if any node is NotReady
 │   ├── wait-for-node-ready.yml      Poll until a node rejoins the cluster
@@ -69,7 +93,9 @@ ansible-playbooks/
     │   ├── k3s-recover.yml          Smart recovery (token rotation, snapshot restore)
     │   ├── k3s-full-recovery.yml    Break-glass: full cluster restore from snapshot
     │   ├── enable-etcd-metrics.yml  Expose etcd metrics for Prometheus
-    │   ├── fetch-secrets.yml        Fetch all secrets from BWS
+    │   ├── fetch-secrets.yml        Fetch all secrets from BWS (runs on localhost)
+    │   ├── setup-archlinux-k3s.yml  Pacman deps before k3s on Arch agents
+    │   ├── archlinux-k3s-agent.yml  Fetch BWS → Arch prereqs → k3s agent (scoped host)
     │   ├── docker-storage.yml       Move Docker data root to /mnt/storage (GPU hosts)
     │   ├── setup-macmini.yml        Mac Mini M4 Docker host setup
     │   └── smoke-test.yml           End-to-end cluster health validation
@@ -246,9 +272,44 @@ kubectl get applications -A          # ArgoCD auto-syncs within 3-5 min
 kubectl get volumes -A -n longhorn-system
 ```
 
+## Arch Linux k3s agent
+
+`archlinux` is in `agents` and joins the existing HA cluster (first controller URL is taken from inventory). From your **Arch control machine** (`localhost` runs `fetch-secrets` first):
+
+```bash
+cd /path/to/ansible-playbooks
+ansible-playbook -i inventory/inventory.ini \
+  playbooks/infrastructure/archlinux-k3s-agent.yml \
+  -e bws_access_token=<BWS_ACCESS_TOKEN> \
+  -e k3s_agent_hosts=archlinux_k3s
+```
+
+`k3s_agent_hosts` must be a host or group pattern so only this machine is targeted (otherwise `k3s-agent.yml` would run on every agent). The inventory defines `archlinux_k3s` as a single-host group for convenience; `archlinux` (the hostname) also works.
+
+Longhorn node packages use `pacman` on Arch (`nfs-utils`, `open-iscsi`, etc.); see `longhorn-storage.yml`.
+
+### archlinux node taint (infra-only by default)
+
+`post-k3s.yml` labels **`archlinux=true`** and taints the **`archlinux_k3s`** host with **`archlinux=true:NoSchedule`**. Only pods that **tolerate** that taint can schedule there, so ordinary application workloads stay off this box.
+
+- **Flannel** (`kube-flannel-ds`) already tolerates all `NoSchedule` taints (`operator: Exists`).
+- **MetalLB** and **Longhorn** need the matching toleration in GitOps — see `k3s-dean-gitops` `infra/metallb/values.yaml` and `infra/longhorn/values.yaml` (sync ArgoCD **before** or right after applying the taint so those pods do not sit Pending).
+
+To run a workload **only** on `archlinux`, add both:
+
+```yaml
+nodeSelector:
+  archlinux: "true"
+tolerations:
+  - key: archlinux
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+```
+
 ## Notes
 
-- GPU hosts (`murderbot`, `archlinux`) are bare metal Docker hosts, not part of k3s
+- GPU host `murderbot` is bare metal Docker only, not part of k3s; `archlinux` is both k3s agent and Docker host
 - `rpi3-0` is storage-only: Longhorn replicas + DaemonSets only, `longhorn:NoSchedule` taint prevents other workloads
 - After a full cluster reset, ArgoCD will auto-reconcile all applications from git within a few minutes
 - After Ansible completes on a fresh cluster, apply bootstrap secrets and the root-app from `k3s-dean-gitops` to finish GitOps setup

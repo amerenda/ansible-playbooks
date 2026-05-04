@@ -1,0 +1,26 @@
+---
+# Join the existing k3s cluster from an Arch Linux host (installs k3s agent).
+#
+# The only secret you pass is your Bitwarden Secrets Manager access token for `bws`.
+# The cluster join token is read from BWS (see group_vars/k3s.yml → bws_secrets.k3s_token).
+#
+# You must scope the agent play to this host; otherwise k3s-agent.yml targets all agents.
+# Example (recommended — k3s_agent_hosts is a host/group pattern, e.g. group archlinux_k3s):
+#
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/archlinux-k3s-agent.yml \
+#     -e bws_access_token="$BWS_ACCESS_TOKEN" \
+#     -e k3s_agent_hosts=archlinux_k3s
+#
+# Equivalent using the hostname:
+#
+#   ansible-playbook ... -e k3s_agent_hosts=archlinux
+
+- name: Fetch secrets from Bitwarden Secrets Manager
+  ansible.builtin.import_playbook: fetch-secrets.yml
+
+- name: Arch Linux k3s prerequisites
+  ansible.builtin.import_playbook: setup-archlinux-k3s.yml
+
+- name: Install k3s agent (scoped host pattern via k3s_agent_hosts)
+  ansible.builtin.import_playbook: k3s-agent.yml

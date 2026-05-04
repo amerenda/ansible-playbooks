@@ -27,20 +27,29 @@
       changed_when: false
       become: true
 
+    # Do not use nested {% set ready %} in Jinja loops — inner scope does not update outer `ready`,
+    # so every node looked NotReady and not_ready_list became a string (join then printed per-char).
+    - name: Reset not-ready node list
+      ansible.builtin.set_fact:
+        not_ready_list: []
+
     - name: Find not-ready nodes
       ansible.builtin.set_fact:
-        not_ready_list: >-
-          {% set ns = namespace(bad=[]) %}
-          {% for node in (node_status.stdout | from_json)['items'] %}
-          {%   set ready = 'Unknown' %}
-          {%   for cond in node.status.conditions | default([]) %}
-          {%     if cond.type == 'Ready' %}{% set ready = cond.status %}{% endif %}
-          {%   endfor %}
-          {%   if ready != 'True' %}
-          {%     set ns.bad = ns.bad + [node.metadata.name] %}
-          {%   endif %}
-          {% endfor %}
-          {{ ns.bad }}
+        not_ready_list: "{{ not_ready_list + [item.metadata.name] }}"
+      loop: "{{ (node_status.stdout | from_json)['items'] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: >-
+        (
+          item.status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | map(attribute='status')
+          | list
+          | first | default('Unknown')
+        ) != 'True'
+
+    - name: Set total node count for health check
+      ansible.builtin.set_fact:
         total_nodes: "{{ (node_status.stdout | from_json)['items'] | length }}"
 
     - name: "ABORT: Node(s) already NotReady"
