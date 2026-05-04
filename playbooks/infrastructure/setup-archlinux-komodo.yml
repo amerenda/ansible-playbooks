@@ -16,6 +16,10 @@
 #     playbooks/infrastructure/setup-archlinux-komodo.yml \
 #     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
 #
+# Local laptop (Ansible on the same machine): put the host in archlinux_komodo_hosts
+# with ansible_connection=local, real LAN ansible_host, and set archlinux_ip in
+# inventory/host_vars/<hostname>.yml so the summary matches Komodo. See README.
+#
 # Tags: arch-komodo, arch-bws, arch-periphery, arch-media-dirs
 
 - name: Bootstrap Komodo Periphery on archlinux

@@ -53,6 +53,18 @@ Do **not** set `ansible_host` to `127.0.0.1` unless you intend the node to adver
 
 **Driving `archlinux` from another PC over SSH:** remove `ansible_connection=local` from `inventory.ini` for `archlinux` and delete or empty `inventory/host_vars/archlinux.yml`.
 
+### Arch / CachyOS laptop (playbook runs locally)
+
+Use this when you run `ansible-playbook` **on the laptop itself** (same pattern as homelab `archlinux` with `ansible_connection=local`):
+
+1. Add the laptop to `[agents]`, `[archlinux_komodo_hosts]`, and `[cachyos_workstations]` with `ansible_host=<your LAN IP>` and `ansible_connection=local` (see commented example in `inventory/inventory.ini`).
+2. Create `inventory/host_vars/<hostname>.yml` with at least:
+   - `ansible_connection: local`
+   - `archlinux_ip: "<same LAN IP>"` — overrides `group_vars/archlinux_komodo_hosts.yml` so the playbook summary and Komodo URLs match this host (the group default is the homelab workstation).
+3. Run `setup-archlinux-komodo.yml` with `--limit <hostname>` (and `bws_access_token` on first bootstrap).
+
+**Bitwarden on workstation hosts:** the play installs **Bitwarden Password Manager** (`bitwarden`), the **vault CLI** (`bitwarden-cli`, command `bw`), and **Bitwarden Secrets Manager CLI** (`bws` to `/usr/local/bin/bws`) for automation and Komodo compose rendering.
+
 ## Prerequisites (any control OS)
 
 - Ansible on the control machine (above: Arch packages; elsewhere: your distro’s `ansible` / `ansible-core`)
@@ -100,8 +112,10 @@ ansible-playbooks/
     │   ├── archlinux-k3s-agent.yml  Fetch BWS → Arch prereqs → k3s agent (scoped host)
     │   ├── docker-storage.yml       Move Docker data root to /mnt/storage (GPU hosts)
     │   ├── setup-macmini.yml        Mac Mini M4 Docker host setup
-    │   ├── setup-archlinux-komodo.yml  Docker + Periphery + media dirs (Komodo on archlinux)
-    │   └── smoke-test.yml           End-to-end cluster health validation
+│   ├── setup-archlinux-komodo.yml  Docker + Periphery + media dirs (Komodo on archlinux)
+│   ├── setup-debian-komodo.yml     Debian GPU host (murderbot): Docker + Periphery + BWS patterns
+│   ├── sysctl-tuning.yml           Sysctl/network tuning (when used)
+│   └── smoke-test.yml           End-to-end cluster health validation
     └── applications/
         └── post-k3s-setup.yml       ArgoCD bootstrap and GitOps setup
 ```
@@ -155,6 +169,13 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/smoke-test.
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
   -e bws_access_token=<TOKEN>
 
+# Komodo Periphery on murderbot (Debian) — same BWS / passkey patterns as archlinux
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-debian-komodo.yml \
+  --extra-vars "bws_access_token=<TOKEN>"
+
+# Inotify sysctl tuning for k3s + GPU agent nodes
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/sysctl-tuning.yml
+
 # Komodo Periphery on archlinux (Docker, BWS, compose.env, force-recreate Periphery, media dirs)
 # First run: pass token. Re-runs: omit token if /etc/komodo/.bws-secret already exists.
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
@@ -193,6 +214,8 @@ for `archlinux_komodo_hosts` and re-run the playbook.
 | `docker-storage.yml` | Moves Docker data root to `/mnt/storage` on GPU hosts | GPU hosts only |
 | `setup-macmini.yml` | OrbStack, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
 | `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts`; first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
+| `setup-debian-komodo.yml` | Murderbot (Debian): Docker + Periphery + `compose.env` from BWS; force-recreates Periphery on re-run (same passkey hygiene as Arch) | Group `murderbot_komodo_hosts`; token like `setup-archlinux-komodo` |
+| `sysctl-tuning.yml` | Raises inotify limits on `k3s` + `gpu_k3s` hosts for many pods/watchers | Non-disruptive; see playbook for `--limit` |
 | `smoke-test.yml` | Validates nodes, etcd, tmpfs, snapshots, Longhorn, ArgoCD | Read-only, safe anytime |
 
 ### Applications
