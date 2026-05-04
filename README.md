@@ -180,7 +180,7 @@ The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **
 | `enable-etcd-metrics.yml` | Adds `--etcd-expose-metrics=true` to k3s config | `serial: 1` + health gate |
 | `fetch-secrets.yml` | Fetches secrets from BWS and sets facts for subsequent plays | Non-disruptive |
 | `docker-storage.yml` | Moves Docker data root to `/mnt/storage` on GPU hosts | GPU hosts only |
-| `setup-macmini.yml` | OrbStack, Ollama, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
+| `setup-macmini.yml` | OrbStack, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
 | `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts`; first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
 | `smoke-test.yml` | Validates nodes, etcd, tmpfs, snapshots, Longhorn, ArgoCD | Read-only, safe anytime |
 
