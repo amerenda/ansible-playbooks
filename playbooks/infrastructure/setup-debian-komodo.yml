@@ -56,6 +56,8 @@
     # Purge those first or apt fails with "trying to overwrite ... docker-buildx".
     - name: Finish interrupted dpkg runs (safe after a failed docker.io install)
       ansible.builtin.command: dpkg --configure -a
+      environment:
+        DEBIAN_FRONTEND: noninteractive
       register: murderbot_dpkg_configure
       changed_when: "'Setting up' in murderbot_dpkg_configure.stdout"
       failed_when: false
@@ -68,6 +70,8 @@
           - docker-compose-plugin
         state: absent
         purge: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
       tags: [debian-komodo, debian-periphery]
 
     - name: Install host packages (Docker, jq, git, curl, unzip)
@@ -81,6 +85,8 @@
           - unzip
         state: present
         update_cache: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
       tags: [debian-komodo, debian-periphery]
 
     - name: Enable and start Docker
