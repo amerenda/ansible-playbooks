@@ -11,7 +11,7 @@ Ansible playbooks for provisioning and managing a high-availability k3s cluster 
 | rpi4-0 | Controller | 10.100.20.12 | 4GB RAM, tight memory |
 | rpi3-0 | Agent (storage-only) | 10.100.20.13 | Longhorn replica node |
 | murderbot | GPU host (bare metal Docker) | 10.100.20.19 | Not part of k3s |
-| archlinux | k3s agent + GPU / Docker host | 10.100.20.25 | Joins cluster as agent; Longhorn scheduling configurable |
+| archlinux | CachyOS workstation + k3s agent + GPU / Docker host | 10.100.20.25 | Joins cluster as agent; Longhorn scheduling configurable |
 | mac-mini-m4 | Docker host (OrbStack) | 10.100.20.18 | Not part of k3s |
 
 All nodes are accessed as user `alex` with SSH key `~/.ssh/alex_id_ed25519`.
@@ -160,7 +160,18 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmi
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
   --extra-vars "bws_access_token=<TOKEN>"
 
+# CachyOS workstation bootstrap on archlinux:
+# Installs requested desktop apps + dotfiles core/devops toolchain using
+# official repos and AUR (yay), then prints command/service verification.
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
+  --limit cachyos_workstations \
+  --extra-vars "bws_access_token=<TOKEN>"
+
 The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **read** both `komodo-dean-passkey` and **`komodo-dean-admin-password`**: the playbook can log into Komodo Core and set Variable `KOMODO_PERIPHERY_PASSKEY` (optional belt-and-suspenders). The usual **Invalid passkey** fix is **`passkey = ""`** on the `archlinux` `[[server]]` in `resource-sync/stacks.toml` so Core uses its global `komodo-dean-passkey` (see Komodo section below).
+
+For policy alignment, avoid manual package/install commands on the workstation.
+If you discover a missing dependency during operations, add it to Ansible vars
+for `archlinux_komodo_hosts` and re-run the playbook.
 
 ## Playbook Descriptions
 

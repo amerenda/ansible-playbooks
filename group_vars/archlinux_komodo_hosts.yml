@@ -8,6 +8,71 @@ archlinux_ip: "10.100.20.25"
 
 # System
 timezone: "America/New_York"
+cachyos_workstation_enabled: true
+
+# Workstation package profile (CachyOS/Arch).
+# Official packages first; AUR handled by setup-archlinux-komodo.yml via yay.
+archlinux_workstation_pacman_packages:
+  - docker
+  - docker-compose
+  - jq
+  - git
+  - curl
+  - unzip
+  - base-devel
+  - zsh
+  - tmux
+  - vim
+  - firefox
+  - steam
+  - code
+  - cryptomator
+  - kubectl
+  - helm
+  - terraform
+  - tflint
+  - github-cli
+  - direnv
+  - restic
+  - yq
+  - httpie
+  - xclip
+  - wget
+  - openssl
+  - bc
+  - gnupg
+  - python
+  - python-pip
+  - go
+  - jdk-openjdk
+  - git-lfs
+  - openvpn
+  - yubikey-manager
+  - docker-buildx
+
+archlinux_workstation_aur_packages:
+  - cursor-bin
+  - dropbox
+  - visual-studio-code-bin
+  - nordvpn-bin
+  - nordpass-bin
+  - kubectx
+  - d2-bin
+
+# Optional services enabled via systemd (system-level only).
+archlinux_workstation_enable_services:
+  - docker
+
+archlinux_workstation_verify_commands:
+  - steam
+  - firefox
+  - code
+  - cursor
+  - dropbox
+  - cryptomator
+  - docker
+  - kubectl
+  - terraform
 
 # Compose paths (cloned by the playbook).
 compose_repo: "https://github.com/amerenda/komodo-dean-gitops.git"

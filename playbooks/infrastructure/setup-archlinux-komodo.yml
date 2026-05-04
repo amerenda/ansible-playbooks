@@ -31,6 +31,7 @@
     komodo_dir: "{{ murderbot_repo_dir }}/komodo"
     komodo_etc: "/etc/komodo"
     bws_token_file: "{{ komodo_etc }}/.bws-secret"
+    aur_build_dir: "/home/{{ target_user }}/.cache/ansible-aur"
 
   pre_tasks:
     - name: Stat existing BWS token on host
@@ -50,24 +51,19 @@
 
   tasks:
     # ─── System packages ───────────────────────────────────────────────────
-    - name: Install host packages (Docker, jq, git, curl, unzip)
+    - name: Install workstation packages from official repos
       pacman:
-        name:
-          - docker
-          - docker-compose
-          - jq
-          - git
-          - curl
-          - unzip
+        name: "{{ archlinux_workstation_pacman_packages }}"
         state: present
         update_cache: yes
       tags: [arch-komodo, arch-periphery]
 
-    - name: Enable and start Docker
+    - name: Enable and start configured workstation services
       systemd:
-        name: docker
+        name: "{{ item }}"
         enabled: yes
         state: started
+      loop: "{{ archlinux_workstation_enable_services }}"
       tags: [arch-komodo, arch-periphery]
 
     - name: Add target user to docker group
@@ -75,6 +71,54 @@
         name: "{{ target_user }}"
         groups: docker
         append: yes
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Check if yay is already installed
+      ansible.builtin.command: bash -lc "command -v yay"
+      register: yay_check
+      changed_when: false
+      failed_when: false
+      become: false
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Ensure AUR build directory exists
+      ansible.builtin.file:
+        path: "{{ aur_build_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0755"
+      when: yay_check.rc != 0
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Clone yay AUR helper
+      ansible.builtin.git:
+        repo: https://aur.archlinux.org/yay.git
+        dest: "{{ aur_build_dir }}/yay"
+        update: yes
+      become: false
+      when: yay_check.rc != 0
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Build and install yay
+      ansible.builtin.shell: |
+        set -euo pipefail
+        makepkg -si --noconfirm --needed
+      args:
+        chdir: "{{ aur_build_dir }}/yay"
+        executable: /bin/bash
+      become: false
+      when: yay_check.rc != 0
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Install workstation packages from AUR
+      ansible.builtin.shell: |
+        set -euo pipefail
+        yay -S --noconfirm --needed {{ archlinux_workstation_aur_packages | join(' ') }}
+      args:
+        executable: /bin/bash
+      become: false
+      when: archlinux_workstation_aur_packages | length > 0
       tags: [arch-komodo, arch-periphery]
 
     # ─── bws CLI on host (also used to render compose.env) ─────────────────
@@ -392,6 +436,22 @@
         )
       tags: [arch-komodo, arch-periphery]
 
+    - name: Verify key workstation commands are installed
+      ansible.builtin.command: bash -lc "command -v {{ item }}"
+      register: workstation_command_checks
+      changed_when: false
+      failed_when: false
+      loop: "{{ archlinux_workstation_verify_commands }}"
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Verify configured services are active
+      ansible.builtin.command: systemctl is-active "{{ item }}"
+      register: workstation_service_checks
+      changed_when: false
+      failed_when: false
+      loop: "{{ archlinux_workstation_enable_services }}"
+      tags: [arch-komodo, arch-periphery]
+
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Show summary
       ansible.builtin.debug:
@@ -402,6 +462,16 @@
           into Komodo Core at {{ komodo_core_url }} and sets Variable
           {{ komodo_periphery_passkey_variable_name }} to the BWS komodo-dean-passkey
           value so Core matches Periphery (ResourceSync [[...]] reference).
+
+          Workstation command checks:
+          {% for check in workstation_command_checks.results | default([]) %}
+          - {{ check.item }}: {{ 'ok' if check.rc == 0 else 'missing' }}
+          {% endfor %}
+
+          Service checks:
+          {% for check in workstation_service_checks.results | default([]) %}
+          - {{ check.item }}: {{ check.stdout | default('unknown') }}
+          {% endfor %}
 
           Next steps (if server still missing): in Komodo UI or resource-sync/stacks.toml,
             1. Server in stacks.toml at https://{{ archlinux_ip }}:8120 (if still used)
