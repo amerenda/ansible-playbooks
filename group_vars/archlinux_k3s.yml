@@ -1,0 +1,4 @@
+---
+# Longhorn data directory on Arch k3s agent (group `archlinux_k3s`).
+longhorn_host_disk_path: /mnt/storage/k3s
+longhorn_k8s_namespace: default

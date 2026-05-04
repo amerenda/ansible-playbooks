@@ -17,8 +17,8 @@
 #     --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
 #
 # Local laptop (Ansible on the same machine): put the host in archlinux_komodo_hosts
-# with ansible_connection=local, real LAN ansible_host, and set archlinux_ip in
-# inventory/host_vars/<hostname>.yml so the summary matches Komodo. See README.
+# with ansible_connection=local, real LAN ansible_host, and archlinux_ip on the
+# inventory line (or inventory/host_vars). See README.
 #
 # Tags: arch-komodo, arch-bws, arch-periphery, arch-media-dirs
 
@@ -26,8 +26,6 @@
   hosts: archlinux_komodo_hosts
   gather_facts: yes
   become: yes
-  vars_files:
-    - ../../group_vars/archlinux_komodo_hosts.yml
   vars:
     target_user: "{{ ansible_user }}"
     compose_dir: "/home/{{ target_user }}/komodo-dean-gitops"

@@ -9,10 +9,20 @@ Ansible playbooks for provisioning and managing a high-availability k3s cluster 
 | rpi5-0 | Controller (cluster-init) | 10.100.20.10 | |
 | rpi5-1 | Controller | 10.100.20.11 | Preferred restore leader |
 | rpi4-0 | Controller | 10.100.20.12 | 4GB RAM, tight memory |
-| rpi3-0 | Agent (storage-only) | 10.100.20.13 | Longhorn replica node |
 | murderbot | GPU host (bare metal Docker) | 10.100.20.19 | Not part of k3s |
 | archlinux | CachyOS workstation + k3s agent + GPU / Docker host | 10.100.20.25 | Joins cluster as agent; Longhorn scheduling configurable |
+| lemurpro | Workstation (Komodo); not a k3s node | 10.100.20.26 | Set `ansible_host` / `archlinux_ip` in `inventory.ini` to the laptop LAN IP |
 | mac-mini-m4 | Docker host (OrbStack) | 10.100.20.18 | Not part of k3s |
+
+### Inventory groups (reduced sprawl)
+
+| Group | Purpose |
+|-------|---------|
+| `k3s` | All k3s members → `group_vars/k3s.yml` (cluster BWS UUIDs, CIDRs, Longhorn defaults). |
+| `pis` | Raspberry Pi k3s nodes (controllers today) → `group_vars/pis.yml`. `setup-rpi.yml` targets this group. |
+| `servers` | Mac Mini + murderbot → `group_vars/servers.yml` (shared timezone, BWS helper version, Komodo Core URL/UUIDs). |
+| `computers` | Workstations (`archlinux`, `lemurpro`) → `group_vars/computers.yml` (Komodo Periphery + workstation packages). |
+| `archlinux_k3s` | Arch k3s agent only → `group_vars/archlinux_k3s.yml` (Longhorn disk path). |
 
 All nodes are accessed as user `alex` with SSH key `~/.ssh/alex_id_ed25519`.
 
@@ -47,20 +57,18 @@ ansible-galaxy collection install -r requirements.yml
 - **`unzip`** and **`curl`** are required if `bws` is not already on `PATH` (the play downloads the official `bws` zip from GitHub into `/usr/local/bin/bws`).
 - **`openssh`** is for reaching Pis and other remotes with the key in `inventory.ini` (`~/.ssh/alex_id_ed25519`).
 
-**k3s agent on the same machine:** Keep the real LAN `ansible_host` for `archlinux` (for example `10.100.20.25`) so k3s `node-ip` stays correct. Use **`ansible_connection=local`** for that host (set in `inventory/inventory.ini` and `inventory/host_vars/archlinux.yml` in this repo). Ansible only loads `host_vars` next to the inventory file (`inventory/host_vars/`), not a top-level `host_vars/` at repo root, when you pass `-i inventory/inventory.ini`.
+**k3s agent on the same machine:** Keep the real LAN `ansible_host` for `archlinux` (for example `10.100.20.25`) so k3s `node-ip` stays correct. Set **`ansible_connection=local`** and **`archlinux_ip`** on the host line in `inventory/inventory.ini`. Optional per-host overrides can also live in `inventory/host_vars/<hostname>.yml` next to the inventory.
 
 Do **not** set `ansible_host` to `127.0.0.1` unless you intend the node to advertise loopback to the cluster.
 
-**Driving `archlinux` from another PC over SSH:** remove `ansible_connection=local` from `inventory.ini` for `archlinux` and delete or empty `inventory/host_vars/archlinux.yml`.
+**Driving `archlinux` from another PC over SSH:** remove `ansible_connection=local` from `inventory.ini` for that host (or override in `inventory/host_vars`).
 
 ### Arch / CachyOS laptop (playbook runs locally)
 
 Use this when you run `ansible-playbook` **on the laptop itself** (same pattern as homelab `archlinux` with `ansible_connection=local`):
 
-1. Add the laptop to `[agents]`, `[archlinux_komodo_hosts]`, and `[cachyos_workstations]` with `ansible_host=<your LAN IP>` and `ansible_connection=local` (see commented example in `inventory/inventory.ini`).
-2. Create `inventory/host_vars/<hostname>.yml` with at least:
-   - `ansible_connection: local`
-   - `archlinux_ip: "<same LAN IP>"` — overrides `group_vars/archlinux_komodo_hosts.yml` so the playbook summary and Komodo URLs match this host (the group default is the homelab workstation).
+1. Add the laptop to `[computers]`, `[archlinux_komodo_hosts]`, and `[cachyos_workstations]`. **Do not** add it to `[k3s]` / `[agents]` if it should not join the cluster (see `lemurpro` in `inventory.ini`).
+2. On the host line in `inventory.ini`, set `ansible_host=<LAN IP>`, `ansible_connection=local`, and `archlinux_ip=<same LAN IP>` (used in `setup-archlinux-komodo` summary / Komodo URL hints).
 3. Run `setup-archlinux-komodo.yml` with `--limit <hostname>` (and `bws_access_token` on first bootstrap).
 
 **Bitwarden on workstation hosts:** the play installs **Bitwarden Password Manager** (`bitwarden`), the **vault CLI** (`bitwarden-cli`, command `bw`), and **Bitwarden Secrets Manager CLI** (`bws` to `/usr/local/bin/bws`) for automation and Komodo compose rendering.
@@ -81,15 +89,14 @@ ansible-playbooks/
 ├── inventory/
 │   └── inventory.ini                Node inventory with groups and host vars
 ├── group_vars/
-│   ├── k3s.yml                      k3s cluster vars, BWS secret UUIDs, network config
-│   ├── rpi.yml                      RPi common vars (packages, locale, timezone)
-│   ├── macmini_hosts.yml            Mac Mini specific vars
-│   ├── archlinux_komodo_hosts.yml   Komodo Periphery + media-server BWS UUIDs (archlinux)
-│   └── rpi5_hosts.yml               RPi 5 specific vars (NVMe mount points)
-├── host_vars/                       (legacy; prefer inventory/host_vars/ with -i inventory/)
-│   └── rpi3-0.yml                   Storage-only node resource reservations
-├── inventory/host_vars/
-│   └── archlinux.yml                local connection when control host == archlinux
+│   ├── k3s.yml                      k3s cluster vars, BWS secret UUIDs, Longhorn defaults
+│   ├── pis.yml                      Raspberry Pi k3s nodes (merged old rpi + rpi5 NVMe)
+│   ├── archlinux_k3s.yml            Arch k3s agent Longhorn disk path
+│   ├── computers.yml                Workstations: Komodo Periphery + workstation packages
+│   ├── servers.yml                  Mac Mini + murderbot shared Komodo/BWS metadata
+│   ├── macmini_hosts.yml            Mac Mini–specific vars
+│   └── murderbot_komodo_hosts.yml   Murderbot host-specific (IP, media paths)
+├── inventory/host_vars/             (optional per-host overrides next to inventory.ini)
 ├── tasks/
 │   ├── check-cluster-health.yml     Health gate — aborts if any node is NotReady
 │   ├── wait-for-node-ready.yml      Poll until a node rejoins the cluster
@@ -97,7 +104,7 @@ ansible-playbooks/
 │   └── archlinux-komodo-render-compose-env.yml  BWS → archlinux/komodo/compose.env (shared)
 └── playbooks/
     ├── infrastructure/
-    │   ├── setup-rpi.yml            OS-level Raspberry Pi preparation
+    │   ├── setup-rpi.yml            Raspberry Pi OS prep (hosts: `pis`)
     │   ├── k3s-controller.yml       Install k3s server on controller nodes
     │   ├── k3s-agent.yml            Install k3s agent on worker nodes
     │   ├── longhorn-storage.yml     iSCSI/NFS prerequisites + Longhorn scheduling
@@ -192,7 +199,7 @@ The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **
 
 For policy alignment, avoid manual package/install commands on the workstation.
 If you discover a missing dependency during operations, add it to Ansible vars
-for `archlinux_komodo_hosts` and re-run the playbook.
+for `computers` / workstation lists in `group_vars/computers.yml` and re-run the playbook.
 
 ## Playbook Descriptions
 
@@ -200,7 +207,7 @@ for `archlinux_komodo_hosts` and re-run the playbook.
 
 | Playbook | Description | Safety |
 |----------|-------------|--------|
-| `setup-rpi.yml` | Static IP, DNS, packages, cgroup config for k3s | Non-disruptive |
+| `setup-rpi.yml` | Raspberry Pi prep for k3s (`pis`: controllers + future Pi workers) | Non-disruptive |
 | `k3s-controller.yml` | Installs k3s server with etcd HA, pulls kubeconfig | `serial: [1, n-1]` + health gate |
 | `k3s-agent.yml` | Installs k3s agent and joins workers | `serial: 1` + health gate |
 | `longhorn-storage.yml` | iSCSI, NFS, kernel modules; Longhorn scheduling config | Non-disruptive |
@@ -213,7 +220,7 @@ for `archlinux_komodo_hosts` and re-run the playbook.
 | `fetch-secrets.yml` | Fetches secrets from BWS and sets facts for subsequent plays | Non-disruptive |
 | `docker-storage.yml` | Moves Docker data root to `/mnt/storage` on GPU hosts | GPU hosts only |
 | `setup-macmini.yml` | OrbStack, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
-| `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts`; first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
+| `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts` (+ `group_vars/computers.yml`); first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
 | `setup-debian-komodo.yml` | Murderbot (Debian): Docker + Periphery + `compose.env` from BWS; force-recreates Periphery on re-run (same passkey hygiene as Arch) | Group `murderbot_komodo_hosts`; token like `setup-archlinux-komodo` |
 | `sysctl-tuning.yml` | Raises inotify limits on `k3s` + `gpu_k3s` hosts for many pods/watchers | Non-disruptive; see playbook for `--limit` |
 | `smoke-test.yml` | Validates nodes, etcd, tmpfs, snapshots, Longhorn, ArgoCD | Read-only, safe anytime |
@@ -358,7 +365,7 @@ Arch box (`https://10.100.20.25:8120` by default). The Core “server” resourc
 passkey must match **`PERIPHERY_PASSKEYS`** in
 `~/komodo-dean-gitops/archlinux/komodo/compose.env` on Arch — both come from
 the same Bitwarden secret **`komodo-dean-passkey`** (UUID in
-`group_vars/archlinux_komodo_hosts.yml` as `komodo_periphery_passkey_bws_uuid`).
+`group_vars/computers.yml` as `komodo_periphery_passkey_bws_uuid`).
 
 ### What the error means
 
@@ -423,6 +430,5 @@ docker logs komodo-periphery 2>&1 | tail -30
 ## Notes
 
 - GPU host `murderbot` is bare metal Docker only, not part of k3s; `archlinux` is both k3s agent and Docker host
-- `rpi3-0` is storage-only: Longhorn replicas + DaemonSets only, `longhorn:NoSchedule` taint prevents other workloads
 - After a full cluster reset, ArgoCD will auto-reconcile all applications from git within a few minutes
 - After Ansible completes on a fresh cluster, apply bootstrap secrets and the root-app from `k3s-dean-gitops` to finish GitOps setup

@@ -1,7 +1,7 @@
 ---
 # Re-render archlinux/komodo/compose.env (PERIPHERY_PASSKEYS from BWS).
 # Required vars (set by parent play): komodo_dir, bws_token_file,
-# komodo_periphery_passkey_bws_uuid (from group_vars/archlinux_komodo_hosts.yml).
+# komodo_periphery_passkey_bws_uuid (from group_vars/computers.yml).
 
 - name: Render archlinux/komodo/compose.env from compose.env.example
   ansible.builtin.shell: |

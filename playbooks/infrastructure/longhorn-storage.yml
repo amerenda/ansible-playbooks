@@ -160,7 +160,6 @@
   vars:
     # Nodes where Longhorn should schedule replicas
     longhorn_scheduling:
-      rpi3-0: true
       rpi4-0: false
       rpi5-0: true
       rpi5-1: true

@@ -1,0 +1,85 @@
+---
+# Workstation / Komodo Periphery hosts (inventory group `computers` + `archlinux_komodo_hosts`).
+# Per-host LAN IP for playbook summary: set `archlinux_ip` on the host in inventory.ini.
+
+timezone: "America/New_York"
+cachyos_workstation_enabled: true
+
+archlinux_workstation_pacman_packages:
+  - docker
+  - docker-compose
+  - jq
+  - git
+  - curl
+  - unzip
+  - base-devel
+  - zsh
+  - tmux
+  - vim
+  - firefox
+  - steam
+  - code
+  - cryptomator
+  - kubectl
+  - helm
+  - terraform
+  - tflint
+  - github-cli
+  - direnv
+  - restic
+  - yq
+  - httpie
+  - xclip
+  - wget
+  - openssl
+  - bc
+  - gnupg
+  - python
+  - python-pip
+  - go
+  - jdk-openjdk
+  - git-lfs
+  - openvpn
+  - yubikey-manager
+  - docker-buildx
+  - bitwarden
+  - bitwarden-cli
+
+archlinux_workstation_aur_packages:
+  - cursor-bin
+  - dropbox
+  - visual-studio-code-bin
+  - nordvpn-bin
+  - nordpass-bin
+  - kubectx
+  - d2-bin
+
+archlinux_workstation_enable_services:
+  - docker
+
+archlinux_workstation_verify_commands:
+  - steam
+  - firefox
+  - code
+  - cursor
+  - dropbox
+  - cryptomator
+  - docker
+  - kubectl
+  - terraform
+  - bws
+  - bw
+  - bitwarden
+
+compose_repo: "https://github.com/amerenda/komodo-dean-gitops.git"
+bws_version: "2.0.0"
+
+komodo_periphery_passkey_bws_uuid: "239d3146-6227-4e87-a56b-b417012a693c"
+komodo_core_url: "http://10.100.20.18:9120"
+komodo_core_admin_password_bws_uuid: "44e040b1-20d8-4f7e-bbfa-b417012a69f9"
+komodo_periphery_passkey_variable_name: "KOMODO_PERIPHERY_PASSKEY"
+komodo_core_sync_passkey: true
+media_server_do_api_token_bws_uuid: "d043a77f-ca1e-4ac6-8cfa-b38200f7b6c9"
+
+media_config_root: "/mnt/storage/media/config"
+media_data_root: "/mnt/storage"

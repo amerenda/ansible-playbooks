@@ -1,5 +1,0 @@
----
-# Same machine as ansible-playbook (no SSH to ansible_host).
-# To drive this host from another PC over SSH, remove ansible_connection here and in inventory.ini.
-ansible_connection: local
-cachyos_workstation_enabled: true

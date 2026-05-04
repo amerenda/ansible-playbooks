@@ -7,7 +7,7 @@
 #   - SSH access to the Mini (ssh mini)
 #   - Passwordless sudo configured
 #   - Xcode CLI Tools + Rosetta installed (run mac-mini-init.sh first on a fresh box)
-#   - Bitwarden Secrets Manager secrets created (see group_vars/macmini_hosts.yml)
+#   - Bitwarden Secrets Manager secrets created (see group_vars/macmini_hosts.yml + servers.yml)
 #
 # Run:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
@@ -29,9 +29,6 @@
   hosts: macmini_hosts
   gather_facts: yes
   tags: [macmini]
-
-  vars_files:
-    - ../../group_vars/macmini_hosts.yml
 
   vars:
     target_user: "{{ ansible_user }}"

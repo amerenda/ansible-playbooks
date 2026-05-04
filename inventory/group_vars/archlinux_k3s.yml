@@ -1,5 +1,0 @@
----
-# Longhorn data directory on this host (must live on /mnt/storage; see longhorn-storage + post-k3s).
-longhorn_host_disk_path: /mnt/storage/k3s
-# Must match Argo Longhorn app destination.namespace (k3s-dean-gitops uses default).
-longhorn_k8s_namespace: default

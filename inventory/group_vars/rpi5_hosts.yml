@@ -1,7 +1,0 @@
-# Group Variables for Raspberry Pi 5 hosts
-# These apply to rpi5_hosts group (rpi5-0, rpi5-1)
-
-# NVMe HAT+ configuration
-nvme_device: "/dev/nvme0n1"
-nvme_mount_point: "/var/lib/longhorn-nvme"
-nvme_fstype: "ext4"

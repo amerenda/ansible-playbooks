@@ -22,8 +22,6 @@
   hosts: murderbot_komodo_hosts
   gather_facts: yes
   become: yes
-  vars_files:
-    - ../../group_vars/murderbot_komodo_hosts.yml
   vars:
     target_user: "{{ ansible_user }}"
     compose_dir: "/home/{{ target_user }}/komodo-dean-gitops"

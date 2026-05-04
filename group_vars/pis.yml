@@ -1,0 +1,36 @@
+---
+# Raspberry Pi k3s nodes (inventory group `pis`: controllers + Pi workers).
+# Merged from former rpi.yml + rpi5_hosts.yml.
+
+target_user: "{{ ansible_user }}"
+
+base_packages:
+  - curl
+  - vim
+  - git
+  - jq
+  - htop
+  - nfs-common
+  - util-linux
+  - open-iscsi
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+
+kernel_modules:
+  - nfs
+  - iscsi_tcp
+
+do_upgrade: "no"
+
+longhorn_iscsi_service: "iscsid"
+longhorn_iscsi_enable: true
+
+timezone: "America/New_York"
+locale: "en_US.UTF-8"
+
+# RPi 5 NVMe HAT+ (hosts also in rpi5_hosts get these; others ignore if unused).
+nvme_device: "/dev/nvme0n1"
+nvme_mount_point: "/var/lib/longhorn-nvme"
+nvme_fstype: "ext4"

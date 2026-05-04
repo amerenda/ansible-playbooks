@@ -12,7 +12,7 @@
 #   5. Creates the mount point and mounts by UUID via /etc/fstab
 #   6. Sets permissions on the mount point
 #
-# Variables (from group_vars/rpi5_hosts.yml):
+# Variables (from group_vars/pis.yml, rpi5_hosts group):
 #   nvme_device:      /dev/nvme0n1
 #   nvme_mount_point: /var/lib/longhorn-nvme
 #   nvme_fstype:      ext4

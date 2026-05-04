@@ -16,8 +16,7 @@ homebrew_packages:
   - kubernetes-cli
   - socat
 
-# System
-timezone: "America/New_York"
+# System (timezone also in group_vars/servers.yml)
 
 # Container images
 ha_version: "2026.1.2"

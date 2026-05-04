@@ -172,7 +172,7 @@
       when: inventory_hostname not in (groups['storage'] | default([]))
       tags: [k3s, longhorn, storage]
 
-    # archlinux: Longhorn default disk path on /mnt/storage (see inventory/group_vars/archlinux_k3s.yml)
+    # archlinux: Longhorn default disk path on /mnt/storage (see group_vars/archlinux_k3s.yml)
     - name: Configure Longhorn disk path on archlinux
       when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
       tags: [k3s, longhorn, archlinux]
