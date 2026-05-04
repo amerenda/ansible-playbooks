@@ -220,7 +220,6 @@
       loop:
         - "{{ media_config_root }}"
         - "{{ media_config_root }}/profilarr/config"
-        - "{{ media_config_root }}/whisparr/config"
         - "{{ media_config_root }}/radarr/config"
         - "{{ media_config_root }}/bazarr/config"
         - "{{ media_config_root }}/sonarr/config"
