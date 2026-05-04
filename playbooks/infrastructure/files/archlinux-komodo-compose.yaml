@@ -19,5 +19,5 @@ services:
       - /proc:/proc
       - /etc/komodo:/etc/komodo
       - /etc/komodo/.bws-secret:/run/secrets/bws-access-token:ro
-      - /opt/media:/opt/media
+      - /mnt/storage/media/config:/mnt/storage/media/config
       - /mnt/storage:/mnt/storage
