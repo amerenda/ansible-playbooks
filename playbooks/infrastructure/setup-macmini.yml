@@ -43,6 +43,8 @@
     compose_dir: "/Users/{{ target_user }}/komodo-dean-gitops"
     macmini_compose_dir: "{{ compose_dir }}/mac-mini-m4"
     komodo_dir: "{{ macmini_compose_dir }}/komodo"
+    # Periphery stack clones + runner-secrets (OrbStack: must be under ~, not /etc/komodo)
+    komodo_periphery_root: "/Users/{{ target_user }}/komodo"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -333,12 +335,16 @@
       no_log: true
       tags: [mini-secrets]
 
-    - name: Create /etc/komodo directory
+    - name: Create Periphery root directory (stack clones, runner-secrets)
       file:
-        path: /etc/komodo
+        path: "{{ item }}"
         state: directory
         owner: "{{ target_user }}"
+        group: staff
         mode: '0755'
+      loop:
+        - "{{ komodo_periphery_root }}"
+        - "{{ komodo_periphery_root }}/runner-secrets"
       become: yes
       tags: [mini-secrets]
 
@@ -399,11 +405,58 @@
         path: "{{ item }}"
         state: directory
         owner: "{{ target_user }}"
+        group: staff
         mode: '0755'
       loop:
-        - /etc/komodo
-        - /etc/komodo/backups
+        - "{{ komodo_periphery_root }}/backups"
       become: yes
+      tags: [mini-komodo]
+
+    - name: Stat legacy Periphery stack checkout
+      ansible.builtin.stat:
+        path: /etc/komodo/stacks/core
+      register: legacy_periphery_stacks
+      tags: [mini-komodo]
+
+    - name: Stat new Periphery stack checkout
+      ansible.builtin.stat:
+        path: "{{ komodo_periphery_root }}/stacks/core"
+      register: new_periphery_stacks
+      tags: [mini-komodo]
+
+    - name: Ensure stacks directory for Periphery migration
+      ansible.builtin.file:
+        path: "{{ komodo_periphery_root }}/stacks"
+        state: directory
+        owner: "{{ target_user }}"
+        group: staff
+        mode: "0755"
+      become: yes
+      when: legacy_periphery_stacks.stat.exists and not new_periphery_stacks.stat.exists
+      tags: [mini-komodo]
+
+    - name: Migrate Periphery stack clones from legacy /etc/komodo (one-time)
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -a
+          - /etc/komodo/stacks/
+          - "{{ komodo_periphery_root }}/stacks/"
+      become: no
+      when: legacy_periphery_stacks.stat.exists and not new_periphery_stacks.stat.exists
+      tags: [mini-komodo]
+
+    - name: Migrate runner secrets from legacy /etc/komodo (if missing)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        d="{{ komodo_periphery_root }}/runner-secrets"
+        if [[ ! -f "$d/github-pat-k3s-dean-gitops" ]] && [[ -d /etc/komodo/runner-secrets ]]; then
+          rsync -a /etc/komodo/runner-secrets/ "$d/"
+        fi
+      args:
+        executable: /bin/bash
+      become: no
+      changed_when: false
       tags: [mini-komodo]
 
     - name: Start Komodo stack
@@ -472,7 +525,7 @@
 
     - name: Read GITOPS_PAT from injected secret file
       slurp:
-        src: /etc/komodo/runner-secrets/github-pat-k3s-dean-gitops
+        src: "{{ komodo_periphery_root }}/runner-secrets/github-pat-k3s-dean-gitops"
       register: gitops_pat_file
       no_log: true
       tags: [mini-komodo]
