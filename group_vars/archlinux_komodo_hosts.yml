@@ -21,12 +21,21 @@ bws_version: "2.0.0"
 # account scoped to read access, and pass its access token via:
 #   --extra-vars "bws_access_token=<TOKEN>"
 #
-# Required secrets (project: k3s):
-#   komodo-dean-passkey            — Periphery ↔ Core auth (shared with mac-mini-m4)
+# Required secrets (project: k3s) — machine account must READ all of these:
+#   komodo-dean-passkey            — Periphery + Core Variable sync
+#   komodo-dean-admin-password     — Core HTTP API login (Variable KOMODO_PERIPHERY_PASSKEY)
 #   media-server-do-api-token      — DigitalOcean API token for media.amer.dev dyndns
 #                                    (rotate before first use; the value committed
 #                                    in the legacy media-server repo is leaked).
 komodo_periphery_passkey_bws_uuid: "239d3146-6227-4e87-a56b-b417012a693c"
+
+# Komodo Core (mac-mini-m4) — LAN API used by setup-archlinux-komodo.yml to push
+# the same komodo-dean-passkey into the Core Variable referenced by ResourceSync
+# (fixes archlinux server "Not Okay" / Invalid passkey when UI variable drifted).
+komodo_core_url: "http://10.100.20.18:9120"
+komodo_core_admin_password_bws_uuid: "44e040b1-20d8-4f7e-bbfa-b417012a69f9"
+komodo_periphery_passkey_variable_name: "KOMODO_PERIPHERY_PASSKEY"
+komodo_core_sync_passkey: true
 
 # Filled in once the rotated DO token is created in BWS (PR 3 / bws_secrets todo).
 media_server_do_api_token_bws_uuid: "REPLACE_WITH_NEW_BWS_UUID"

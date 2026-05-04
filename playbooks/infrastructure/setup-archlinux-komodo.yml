@@ -265,19 +265,145 @@
       when: storage_mount.rc == 0
       tags: [arch-komodo, arch-media-dirs]
 
+    # ─── Komodo Core: sync Variable to BWS passkey (fixes "Not Okay" / Invalid passkey) ─
+    # Periphery already uses komodo-dean-passkey from BWS. Core must send the same
+    # string (stacks.toml uses [[KOMODO_PERIPHERY_PASSKEY]]). Update or create that
+    # Variable via Core HTTP API (same UUIDs as mac-mini group_vars).
+    - name: Fetch Komodo admin password from BWS (Core API login)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        /usr/local/bin/bws secret get "{{ komodo_core_admin_password_bws_uuid }}" \
+          --access-token "$(cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+      args:
+        executable: /bin/bash
+      register: komodo_admin_for_core
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: komodo_core_sync_passkey | default(true)
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Fetch komodo-dean-passkey from BWS (Core Variable value)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        /usr/local/bin/bws secret get "{{ komodo_periphery_passkey_bws_uuid }}" \
+          --access-token "$(cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+      args:
+        executable: /bin/bash
+      register: komodo_passkey_for_core
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: komodo_core_sync_passkey | default(true)
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Login to Komodo Core API (admin)
+      ansible.builtin.uri:
+        url: "{{ komodo_core_url }}/auth/login/LoginLocalUser"
+        method: POST
+        body_format: json
+        body:
+          username: admin
+          password: "{{ komodo_admin_for_core.stdout }}"
+        status_code: 200
+        timeout: 30
+      register: komodo_core_login
+      no_log: true
+      when: >-
+        komodo_core_sync_passkey | default(true)
+        and komodo_admin_for_core.rc | default(1) == 0
+        and komodo_passkey_for_core.rc | default(1) == 0
+        and (komodo_admin_for_core.stdout | default('') | length) > 0
+        and (komodo_passkey_for_core.stdout | default('') | length) > 0
+      tags: [arch-komodo, arch-periphery]
+
+    - name: List Komodo Variables from Core
+      ansible.builtin.uri:
+        url: "{{ komodo_core_url }}/read/ListVariables"
+        method: POST
+        body_format: json
+        body: {}
+        headers:
+          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+        status_code: 200
+        timeout: 30
+      register: komodo_core_variables
+      when: komodo_core_login is succeeded
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Find existing periphery passkey variable on Core
+      ansible.builtin.set_fact:
+        komodo_core_passkey_var: "{{ (komodo_core_variables.json | default([]) | selectattr('name', 'equalto', komodo_periphery_passkey_variable_name) | list) | first | default({}) }}"
+      when: komodo_core_login is succeeded
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Create Komodo Variable for periphery passkey (if missing)
+      ansible.builtin.uri:
+        url: "{{ komodo_core_url }}/write/CreateVariable"
+        method: POST
+        body_format: json
+        body:
+          name: "{{ komodo_periphery_passkey_variable_name }}"
+          value: "{{ komodo_passkey_for_core.stdout }}"
+          description: "Synced from BWS komodo-dean-passkey by setup-archlinux-komodo"
+          is_secret: true
+        headers:
+          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+        status_code: 200
+        timeout: 30
+      when: >-
+        komodo_core_login is succeeded
+        and komodo_core_passkey_var == {}
+      no_log: true
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Update Komodo Variable to match BWS passkey (if drifted)
+      ansible.builtin.uri:
+        url: "{{ komodo_core_url }}/write/UpdateVariableValue"
+        method: POST
+        body_format: json
+        body:
+          name: "{{ komodo_periphery_passkey_variable_name }}"
+          value: "{{ komodo_passkey_for_core.stdout }}"
+        headers:
+          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+        status_code: 200
+        timeout: 30
+      when: >-
+        komodo_core_login is succeeded
+        and komodo_core_passkey_var != {}
+        and ((komodo_core_passkey_var.value | default('') | string) != (komodo_passkey_for_core.stdout | string))
+      no_log: true
+      tags: [arch-komodo, arch-periphery]
+
+    - name: Note when Core variable sync was skipped
+      ansible.builtin.debug:
+        msg: >-
+          Komodo Core variable sync skipped: bws could not read admin password or
+          passkey (grant this machine account read on those secrets), or Core at
+          {{ komodo_core_url }} unreachable. Set komodo_core_sync_passkey: false to silence.
+      when: >-
+        komodo_core_sync_passkey | default(true)
+        and (
+          komodo_admin_for_core.rc | default(1) != 0
+          or komodo_passkey_for_core.rc | default(1) != 0
+          or (komodo_admin_for_core.stdout | default('') | length) == 0
+          or (komodo_passkey_for_core.stdout | default('') | length) == 0
+          or komodo_core_login is failed
+        )
+      tags: [arch-komodo, arch-periphery]
+
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Show summary
-      debug:
+      ansible.builtin.debug:
         msg: |
           Komodo Periphery is up on https://{{ archlinux_ip }}:8120
 
-          If Core still shows "Invalid passkey", the Komodo Variable used for
-          the archlinux server (e.g. [[KOMODO_PERIPHERY_PASSKEY]]) must match
-          BWS komodo-dean-passkey exactly — this playbook only fixes Periphery's side.
+          When komodo_core_sync_passkey is true (default), this playbook also logs
+          into Komodo Core at {{ komodo_core_url }} and sets Variable
+          {{ komodo_periphery_passkey_variable_name }} to the BWS komodo-dean-passkey
+          value so Core matches Periphery (ResourceSync [[...]] reference).
 
-          Next steps (manual, in the Komodo UI on mac-mini-m4 — or via the
-          [[server]] block in resource-sync/stacks.toml once it's added):
-            1. Add a Komodo Server resource named "archlinux" pointing at
-               https://{{ archlinux_ip }}:8120, passkey komodo-dean-passkey.
-            2. Once visible/healthy, push a media-server stack to the gitops
-               repo (archlinux/media-server/) and ResourceSync will register it.
+          Next steps (if server still missing): in Komodo UI or resource-sync/stacks.toml,
+            1. Server "archlinux" at https://{{ archlinux_ip }}:8120
+            2. Push archlinux/media-server/ when ready; ResourceSync registers stacks

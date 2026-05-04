@@ -159,7 +159,8 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmi
 # First run: pass token. Re-runs: omit token if /etc/komodo/.bws-secret already exists.
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
   --extra-vars "bws_access_token=<TOKEN>"
-```
+
+The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **read** both `komodo-dean-passkey` and **`komodo-dean-admin-password`**: the playbook logs into Komodo Core and sets Variable `KOMODO_PERIPHERY_PASSKEY` to match BWS so the archlinux server stops reporting **Not Okay** / **Invalid passkey**.
 
 ## Playbook Descriptions
 
