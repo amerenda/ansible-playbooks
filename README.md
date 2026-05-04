@@ -160,7 +160,7 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmi
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
   --extra-vars "bws_access_token=<TOKEN>"
 
-The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **read** both `komodo-dean-passkey` and **`komodo-dean-admin-password`**: the playbook logs into Komodo Core and sets Variable `KOMODO_PERIPHERY_PASSKEY` to match BWS so the archlinux server stops reporting **Not Okay** / **Invalid passkey**.
+The archlinux BWS machine account (written to `/etc/komodo/.bws-secret`) must **read** both `komodo-dean-passkey` and **`komodo-dean-admin-password`**: the playbook can log into Komodo Core and set Variable `KOMODO_PERIPHERY_PASSKEY` (optional belt-and-suspenders). The usual **Invalid passkey** fix is **`passkey = ""`** on the `archlinux` `[[server]]` in `resource-sync/stacks.toml` so Core uses its global `komodo-dean-passkey` (see Komodo section below).
 
 ## Playbook Descriptions
 
@@ -333,22 +333,27 @@ Symptoms include **“Failed to receive Login Success message”** and
 mismatch** (wrong secret, stale file, or invisible whitespace), not TLS or
 firewall.
 
+**GitOps gotcha:** in `resource-sync/stacks.toml`, **`passkey = "[[SOME_VARIABLE]]"`**
+on a `[[server]]` can be stored in Core **literally** (including the brackets),
+so Core sends that text instead of the secret — Periphery then rejects it even
+when the Variable and both Periphery envs match BWS. Prefer **`passkey = ""`**
+for the archlinux server so Core uses its **global** passkey (`KOMODO_PASSKEY_FILE`
+→ `komodo-dean-passkey` on the Mini), same as `PERIPHERY_PASSKEYS` on Arch.
+
 ### Checklist (in order)
 
-1. **Komodo UI (Core)** — **Variables**: `KOMODO_PERIPHERY_PASSKEY` (or whatever
-   name your `[[...]]` reference uses in ResourceSync) must be the **exact**
-   same value as BWS `komodo-dean-passkey` — no leading/trailing spaces or
-   newlines. Re-paste from BWS if unsure.
+1. **`resource-sync/stacks.toml`** — For `[[server]]` `archlinux`, use
+   **`passkey = ""`** (inherit Core global) unless you truly need a per-server
+   override. Re-sync after changing TOML.
 2. **Arch `compose.env`** — If `PERIPHERY_PASSKEYS` is still
    `ANSIBLE_WILL_REPLACE_THIS`, the render step never succeeded; re-run
    `setup-archlinux-komodo.yml` (it re-renders and force-recreates Periphery).
-3. **BWS rotation** — If `komodo-dean-passkey` was rotated in Bitwarden, Core
-   (mac-mini) and Arch Periphery must both pick up the new value: update the
-   Komodo Variable, re-inject mac-mini secrets if needed, then re-render Arch
-   `compose.env` and restart Periphery.
-4. **Same secret as mac-mini Periphery** — Arch uses the **shared**
-   `komodo-dean-passkey` (not a second passkey) unless you intentionally split
-   servers in Komodo.
+3. **BWS rotation** — If `komodo-dean-passkey` was rotated in Bitwarden, re-inject
+   mac-mini secrets (`inject-secrets.sh`), re-run `setup-archlinux-komodo.yml`,
+   and restart Komodo Core on the Mini if the server still shows stale errors.
+4. **Optional Variable** — `KOMODO_PERIPHERY_PASSKEY` is only needed if you
+   still reference it elsewhere; the archlinux server block should not rely on
+   `[[...]]` for `passkey` (see gotcha above).
 
 ### Refresh Periphery / passkey (same playbook)
 
