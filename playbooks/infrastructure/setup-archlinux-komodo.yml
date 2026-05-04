@@ -75,6 +75,50 @@
         append: yes
       tags: [arch-komodo, arch-periphery]
 
+    # Docker Compose `gpus: all` for llm-agent/Ollama needs the NVIDIA Container Toolkit.
+    - name: Detect NVIDIA driver (skip toolkit on GPU-less hosts)
+      ansible.builtin.command: nvidia-smi -L
+      register: archlinux_nvidia_smi
+      changed_when: false
+      failed_when: false
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
+    - name: Install NVIDIA Container Toolkit (pacman)
+      pacman:
+        name: nvidia-container-toolkit
+        state: present
+      when: archlinux_nvidia_smi.rc == 0
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
+    - name: Capture Docker daemon.json before NVIDIA runtime registration
+      ansible.builtin.stat:
+        path: /etc/docker/daemon.json
+      register: archlinux_daemon_json_pre
+      when: archlinux_nvidia_smi.rc == 0
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
+    - name: Register NVIDIA runtime with Docker
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+      when: archlinux_nvidia_smi.rc == 0
+      changed_when: false
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
+    - name: Capture Docker daemon.json after NVIDIA runtime registration
+      ansible.builtin.stat:
+        path: /etc/docker/daemon.json
+      register: archlinux_daemon_json_post
+      when: archlinux_nvidia_smi.rc == 0
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
+    - name: Restart Docker when NVIDIA runtime changed daemon.json
+      systemd:
+        name: docker
+        state: restarted
+      when:
+        - archlinux_nvidia_smi.rc == 0
+        - (archlinux_daemon_json_post.stat.checksum | default('')) != (archlinux_daemon_json_pre.stat.checksum | default(''))
+      tags: [arch-komodo, arch-periphery, arch-nvidia-docker]
+
     - name: Check if yay is already installed
       ansible.builtin.command: bash -lc "command -v yay"
       register: yay_check
