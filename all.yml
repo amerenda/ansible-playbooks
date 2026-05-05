@@ -54,3 +54,11 @@
 - name: Setup Mac Mini M4 (Docker host via OrbStack)
   import_playbook: playbooks/infrastructure/setup-macmini.yml
   tags: [macmini, mini-homebrew, mini-system, mini-orbstack, mini-secrets, mini-komodo, mini-tailscale, mini-summary]
+
+# murderbot — Debian Komodo Periphery host (media-server stack + NVIDIA GPU)
+# Run standalone: ansible-playbook -i inventory/inventory.ini \
+#   playbooks/infrastructure/setup-debian-komodo.yml \
+#   --extra-vars "bws_access_token=<MURDERBOT_BWS_TOKEN>"
+- name: Setup murderbot as Komodo Periphery host (Debian)
+  import_playbook: playbooks/infrastructure/setup-debian-komodo.yml
+  tags: [debian-komodo, debian-bws, debian-periphery, debian-media-dirs]
