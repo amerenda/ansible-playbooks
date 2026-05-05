@@ -29,12 +29,21 @@
     komodo_dir: "{{ murderbot_repo_dir }}/komodo"
     komodo_etc: "/etc/komodo"
     bws_token_file: "{{ komodo_etc }}/.bws-secret"
+    bws_token_dir: "{{ komodo_etc }}/secrets"
+    bws_token_durable_file: "{{ bws_token_dir }}/bws-access-token"
+    komodo_periphery_service_name: "komodo-periphery"
+    komodo_periphery_port: 8120
 
   pre_tasks:
-    - name: Stat existing BWS token on host
+    - name: Stat existing BWS token on host (legacy path)
       ansible.builtin.stat:
         path: "{{ bws_token_file }}"
       register: bws_secret_stat
+
+    - name: Stat existing BWS token on host (durable path)
+      ansible.builtin.stat:
+        path: "{{ bws_token_durable_file }}"
+      register: bws_secret_durable_stat
 
     - name: Fail if no BWS token on host and none passed in
       ansible.builtin.fail:
@@ -44,9 +53,16 @@
           (from a previous bootstrap).
       when:
         - not bws_secret_stat.stat.exists
+        - not bws_secret_durable_stat.stat.exists
         - bws_access_token is not defined or (bws_access_token | default('') | length) == 0
 
   tasks:
+    - name: Resolve media path defaults
+      ansible.builtin.set_fact:
+        media_config_root_effective: "{{ lookup('vars', 'media_config_root', default='/mnt/storage/media/config') }}"
+        media_data_root_effective: "{{ lookup('vars', 'media_data_root', default='/mnt/storage') }}"
+      tags: [debian-komodo, debian-media-dirs]
+
     # ─── System packages ───────────────────────────────────────────────────
     # Hosts previously set up with Docker CE (docker.com apt repo) keep
     # docker-buildx-plugin / docker-compose-plugin, which own the same paths as
@@ -130,6 +146,15 @@
         mode: "0755"
       tags: [debian-komodo, debian-bws, debian-periphery]
 
+    - name: Ensure /etc/komodo/secrets exists
+      file:
+        path: "{{ bws_token_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
     - name: Write BWS access token (mode 0600)
       ansible.builtin.copy:
         content: "{{ bws_access_token }}"
@@ -139,6 +164,63 @@
         group: root
       no_log: true
       when: bws_access_token is defined and (bws_access_token | length) > 0
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
+    - name: Seed legacy token from durable file when token var not provided
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ bws_token_durable_file }}"
+        dest: "{{ bws_token_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - (bws_access_token is not defined or (bws_access_token | default('') | length) == 0)
+        - bws_secret_durable_stat.stat.exists
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
+    - name: Resolve BWS token secret UUID for durable host token
+      ansible.builtin.set_fact:
+        komodo_bws_access_token_ro_bws_uuid_effective: "{{ lookup('vars', 'komodo_bws_access_token_ro_bws_uuid', default='') }}"
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
+    - name: Fetch durable BWS token from Bitwarden
+      ansible.builtin.shell: |
+        set -euo pipefail
+        /usr/local/bin/bws secret get "{{ komodo_bws_access_token_ro_bws_uuid_effective }}" \
+          --access-token "$(cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+      args:
+        executable: /bin/bash
+      register: komodo_bws_durable_token
+      changed_when: false
+      no_log: true
+      when: komodo_bws_access_token_ro_bws_uuid_effective | length > 0
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
+    - name: Write durable BWS token file from Bitwarden secret
+      ansible.builtin.copy:
+        content: "{{ komodo_bws_durable_token.stdout }}"
+        dest: "{{ bws_token_durable_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - komodo_bws_access_token_ro_bws_uuid_effective | length > 0
+        - (komodo_bws_durable_token.stdout | default('') | length) > 0
+      tags: [debian-komodo, debian-bws, debian-periphery]
+
+    - name: Keep legacy BWS token file synced from durable token
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ bws_token_durable_file }}"
+        dest: "{{ bws_token_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - komodo_bws_access_token_ro_bws_uuid_effective | length > 0
+        - (komodo_bws_durable_token.stdout | default('') | length) > 0
       tags: [debian-komodo, debian-bws, debian-periphery]
 
     # ─── komodo-dean-gitops checkout ──────────────────────────────────────
@@ -233,6 +315,10 @@
         timeout: 90
       tags: [debian-komodo, debian-periphery]
 
+    - name: Ensure Komodo Periphery service starts on boot
+      ansible.builtin.include_tasks: ../../tasks/komodo-periphery-systemd.yml
+      tags: [debian-komodo, debian-periphery]
+
     # ─── Media-server host directories ─────────────────────────────────────
     - name: Pre-create media-server config dirs (owner 1000:1000)
       file:
@@ -242,19 +328,19 @@
         group: "1000"
         mode: "0755"
       loop:
-        - "{{ media_config_root }}"
-        - "{{ media_config_root }}/profilarr/config"
-        - "{{ media_config_root }}/radarr/config"
-        - "{{ media_config_root }}/bazarr/config"
-        - "{{ media_config_root }}/sonarr/config"
-        - "{{ media_config_root }}/sonarr/scripts"
-        - "{{ media_config_root }}/prowlarr/config"
-        - "{{ media_config_root }}/sabnzbd/config"
-        - "{{ media_config_root }}/jellyfin/config"
+        - "{{ media_config_root_effective }}"
+        - "{{ media_config_root_effective }}/profilarr/config"
+        - "{{ media_config_root_effective }}/radarr/config"
+        - "{{ media_config_root_effective }}/bazarr/config"
+        - "{{ media_config_root_effective }}/sonarr/config"
+        - "{{ media_config_root_effective }}/sonarr/scripts"
+        - "{{ media_config_root_effective }}/prowlarr/config"
+        - "{{ media_config_root_effective }}/sabnzbd/config"
+        - "{{ media_config_root_effective }}/jellyfin/config"
       tags: [debian-komodo, debian-media-dirs]
 
     - name: Verify /mnt/storage is mounted (out-of-band setup required)
-      shell: mountpoint -q "{{ media_data_root }}"
+      shell: mountpoint -q "{{ media_data_root_effective }}"
       register: storage_mount
       changed_when: false
       failed_when: false
@@ -263,7 +349,7 @@
     - name: Warn if /mnt/storage is not mounted
       debug:
         msg: |
-          {{ media_data_root }} is not a mountpoint. The media-server stack
+          {{ media_data_root_effective }} is not a mountpoint. The media-server stack
           assumes a real disk is mounted there. Set this up out of band
           (parted/mkfs/fstab) before deploying the media-server stack.
       when: storage_mount.rc != 0
@@ -277,14 +363,14 @@
         group: "1000"
         mode: "0755"
       loop:
-        - "{{ media_data_root }}/movies"
-        - "{{ media_data_root }}/tv"
-        - "{{ media_data_root }}/books"
-        - "{{ media_data_root }}/downloads"
-        - "{{ media_data_root }}/downloads/complete"
-        - "{{ media_data_root }}/downloads/incomplete"
-        - "{{ media_data_root }}/cache"
-        - "{{ media_data_root }}/cache/transcode"
+        - "{{ media_data_root_effective }}/movies"
+        - "{{ media_data_root_effective }}/tv"
+        - "{{ media_data_root_effective }}/books"
+        - "{{ media_data_root_effective }}/downloads"
+        - "{{ media_data_root_effective }}/downloads/complete"
+        - "{{ media_data_root_effective }}/downloads/incomplete"
+        - "{{ media_data_root_effective }}/cache"
+        - "{{ media_data_root_effective }}/cache/transcode"
       when: storage_mount.rc == 0
       tags: [debian-komodo, debian-media-dirs]
 
@@ -292,10 +378,26 @@
     # Periphery already uses komodo-dean-passkey from BWS. Core must send the same
     # string (stacks.toml uses [[KOMODO_PERIPHERY_PASSKEY]]). Update or create that
     # Variable via Core HTTP API (same UUIDs as mac-mini group_vars).
+    - name: Resolve whether Komodo Core variable sync is enabled
+      ansible.builtin.set_fact:
+        komodo_core_url_effective: "{{ lookup('vars', 'komodo_core_url', default='') }}"
+        komodo_periphery_passkey_variable_name_effective: "{{ lookup('vars', 'komodo_periphery_passkey_variable_name', default='KOMODO_PERIPHERY_PASSKEY') }}"
+        komodo_core_admin_password_bws_uuid_effective: "{{ lookup('vars', 'komodo_core_admin_password_bws_uuid', default='') }}"
+        komodo_periphery_passkey_bws_uuid_effective: "{{ lookup('vars', 'komodo_periphery_passkey_bws_uuid', default='') }}"
+        komodo_core_sync_enabled_effective: >-
+          {{
+            (komodo_core_sync_passkey | default(true) | bool)
+            and (lookup('vars', 'komodo_core_admin_password_bws_uuid', default='') | length > 0)
+            and (lookup('vars', 'komodo_periphery_passkey_bws_uuid', default='') | length > 0)
+            and (lookup('vars', 'komodo_core_url', default='') | length > 0)
+            and (lookup('vars', 'komodo_periphery_passkey_variable_name', default='') | length > 0)
+          }}
+      tags: [debian-komodo, debian-periphery]
+
     - name: Fetch Komodo admin password from BWS (Core API login)
       ansible.builtin.shell: |
         set -euo pipefail
-        /usr/local/bin/bws secret get "{{ komodo_core_admin_password_bws_uuid }}" \
+        /usr/local/bin/bws secret get "{{ komodo_core_admin_password_bws_uuid_effective }}" \
           --access-token "$(cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
       args:
         executable: /bin/bash
@@ -303,13 +405,13 @@
       changed_when: false
       failed_when: false
       no_log: true
-      when: komodo_core_sync_passkey | default(true)
+      when: komodo_core_sync_enabled_effective
       tags: [debian-komodo, debian-periphery]
 
     - name: Fetch komodo-dean-passkey from BWS (Core Variable value)
       ansible.builtin.shell: |
         set -euo pipefail
-        /usr/local/bin/bws secret get "{{ komodo_periphery_passkey_bws_uuid }}" \
+        /usr/local/bin/bws secret get "{{ komodo_periphery_passkey_bws_uuid_effective }}" \
           --access-token "$(cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
       args:
         executable: /bin/bash
@@ -317,12 +419,12 @@
       changed_when: false
       failed_when: false
       no_log: true
-      when: komodo_core_sync_passkey | default(true)
+      when: komodo_core_sync_enabled_effective
       tags: [debian-komodo, debian-periphery]
 
     - name: Login to Komodo Core API (admin)
       ansible.builtin.uri:
-        url: "{{ komodo_core_url }}/auth/login/LoginLocalUser"
+        url: "{{ komodo_core_url_effective }}/auth/login/LoginLocalUser"
         method: POST
         body_format: json
         body:
@@ -333,67 +435,79 @@
       register: komodo_core_login
       no_log: true
       when: >-
-        komodo_core_sync_passkey | default(true)
+        komodo_core_sync_enabled_effective
         and komodo_admin_for_core.rc | default(1) == 0
         and komodo_passkey_for_core.rc | default(1) == 0
         and (komodo_admin_for_core.stdout | default('') | length) > 0
         and (komodo_passkey_for_core.stdout | default('') | length) > 0
       tags: [debian-komodo, debian-periphery]
 
+    - name: Determine if Komodo Core login is usable
+      ansible.builtin.set_fact:
+        komodo_core_login_ready: >-
+          {{
+            komodo_core_sync_enabled_effective
+            and (komodo_core_login is defined)
+            and not (komodo_core_login.skipped | default(false))
+            and not (komodo_core_login.failed | default(false))
+            and ((komodo_core_login.get('json', {}).get('data', {}).get('jwt', '') | length) > 0)
+          }}
+      tags: [debian-komodo, debian-periphery]
+
     - name: List Komodo Variables from Core
       ansible.builtin.uri:
-        url: "{{ komodo_core_url }}/read/ListVariables"
+        url: "{{ komodo_core_url_effective }}/read/ListVariables"
         method: POST
         body_format: json
         body: {}
         headers:
-          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+          Authorization: "{{ komodo_core_login.get('json', {}).get('data', {}).get('jwt', '') }}"
         status_code: 200
         timeout: 30
       register: komodo_core_variables
-      when: komodo_core_login is succeeded
+      when: komodo_core_login_ready
       tags: [debian-komodo, debian-periphery]
 
     - name: Find existing periphery passkey variable on Core
       ansible.builtin.set_fact:
-        komodo_core_passkey_var: "{{ (komodo_core_variables.json | default([]) | selectattr('name', 'equalto', komodo_periphery_passkey_variable_name) | list) | first | default({}) }}"
-      when: komodo_core_login is succeeded
+        komodo_core_passkey_var: "{{ (komodo_core_variables.json | default([]) | selectattr('name', 'equalto', komodo_periphery_passkey_variable_name_effective) | list) | first | default({}) }}"
+      when: komodo_core_login_ready
       tags: [debian-komodo, debian-periphery]
 
     - name: Create Komodo Variable for periphery passkey (if missing)
       ansible.builtin.uri:
-        url: "{{ komodo_core_url }}/write/CreateVariable"
+        url: "{{ komodo_core_url_effective }}/write/CreateVariable"
         method: POST
         body_format: json
         body:
-          name: "{{ komodo_periphery_passkey_variable_name }}"
+          name: "{{ komodo_periphery_passkey_variable_name_effective }}"
           value: "{{ komodo_passkey_for_core.stdout }}"
           description: "Synced from BWS komodo-dean-passkey by Ansible Komodo playbooks"
           is_secret: true
         headers:
-          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+          Authorization: "{{ komodo_core_login.get('json', {}).get('data', {}).get('jwt', '') }}"
         status_code: 200
         timeout: 30
       when: >-
-        komodo_core_login is succeeded
+        komodo_core_login_ready
         and komodo_core_passkey_var == {}
       no_log: true
       tags: [debian-komodo, debian-periphery]
 
     - name: Update Komodo Variable to match BWS passkey (if drifted)
       ansible.builtin.uri:
-        url: "{{ komodo_core_url }}/write/UpdateVariableValue"
+        url: "{{ komodo_core_url_effective }}/write/UpdateVariableValue"
         method: POST
         body_format: json
         body:
-          name: "{{ komodo_periphery_passkey_variable_name }}"
+          name: "{{ komodo_periphery_passkey_variable_name_effective }}"
           value: "{{ komodo_passkey_for_core.stdout }}"
         headers:
-          Authorization: "{{ komodo_core_login.json.data.jwt }}"
+          Authorization: "{{ komodo_core_login.get('json', {}).get('data', {}).get('jwt', '') }}"
         status_code: 200
         timeout: 30
       when: >-
-        komodo_core_login is succeeded
+        komodo_core_login_ready
         and komodo_core_passkey_var != {}
         and ((komodo_core_passkey_var.value | default('') | string) != (komodo_passkey_for_core.stdout | string))
       no_log: true
@@ -404,29 +518,38 @@
         msg: >-
           Komodo Core variable sync skipped: bws could not read admin password or
           passkey (grant this machine account read on those secrets), or Core at
-          {{ komodo_core_url }} unreachable. Set komodo_core_sync_passkey: false to silence.
+          {{ komodo_core_url_effective }} unreachable. Set komodo_core_sync_passkey: false to silence.
       when: >-
-        komodo_core_sync_passkey | default(true)
+        komodo_core_sync_enabled_effective
         and (
           komodo_admin_for_core.rc | default(1) != 0
           or komodo_passkey_for_core.rc | default(1) != 0
           or (komodo_admin_for_core.stdout | default('') | length) == 0
           or (komodo_passkey_for_core.stdout | default('') | length) == 0
-          or komodo_core_login is failed
+          or (komodo_core_login is defined and (komodo_core_login.failed | default(false)))
         )
+      tags: [debian-komodo, debian-periphery]
+
+    - name: Note when Core variable sync is disabled by missing vars
+      ansible.builtin.debug:
+        msg: >-
+          Komodo Core variable sync disabled for this host because one or more required vars
+          are missing (komodo_core_url, komodo_core_admin_password_bws_uuid,
+          komodo_periphery_passkey_bws_uuid, komodo_periphery_passkey_variable_name).
+      when: not komodo_core_sync_enabled_effective
       tags: [debian-komodo, debian-periphery]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Show summary
       ansible.builtin.debug:
         msg: |
-          Komodo Periphery is up on https://{{ murderbot_ip }}:8120
+          Komodo Periphery is up on https://{{ murderbot_ip | default(ansible_host | default(inventory_hostname)) }}:8120
 
           When komodo_core_sync_passkey is true (default), this playbook also logs
-          into Komodo Core at {{ komodo_core_url }} and sets Variable
-          {{ komodo_periphery_passkey_variable_name }} to the BWS komodo-dean-passkey
+          into Komodo Core at {{ komodo_core_url_effective | default('N/A') }} and sets Variable
+          {{ komodo_periphery_passkey_variable_name_effective | default('KOMODO_PERIPHERY_PASSKEY') }} to the BWS komodo-dean-passkey
           value so Core matches Periphery (ResourceSync [[...]] reference).
 
           Next steps (if server still missing): in Komodo UI or resource-sync/stacks.toml,
-            1. Server "murderbot" in stacks.toml at https://{{ murderbot_ip }}:8120
+            1. Server "murderbot" in stacks.toml at https://{{ murderbot_ip | default(ansible_host | default(inventory_hostname)) }}:8120
             2. murderbot/media-server/ in git; ResourceSync registers stacks

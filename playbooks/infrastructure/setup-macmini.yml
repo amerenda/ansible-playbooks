@@ -41,6 +41,9 @@
     komodo_dir: "{{ macmini_compose_dir }}/komodo"
     # Periphery stack clones + runner-secrets (OrbStack: must be under ~, not /etc/komodo)
     komodo_periphery_root: "/Users/{{ target_user }}/komodo"
+    bws_token_dir: "/etc/komodo/secrets"
+    bws_token_file: "{{ bws_token_dir }}/bws-access-token"
+    bws_token_legacy_file: "/Users/{{ target_user }}/.bws-secret"
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -258,12 +261,22 @@
     # komodo-dean-passkey matches archlinux Periphery (see
     # tasks/archlinux-komodo-render-compose-env.yml on the Arch playbook).
 
+    - name: Check for existing durable BWS token file
+      stat:
+        path: "{{ bws_token_file }}"
+      register: macmini_bws_token_stat
+      become: yes
+      tags: [mini-secrets, mini-komodo]
+
     - name: Validate bws_access_token is provided
       fail:
         msg: |
-          bws_access_token must be provided. Run with:
+          bws_access_token must be provided for first bootstrap. Run with:
             ansible-playbook ... --extra-vars "bws_access_token=<YOUR_BWS_TOKEN>"
-      when: bws_access_token is not defined or bws_access_token == ""
+          Re-runs can reuse {{ bws_token_file }}.
+      when:
+        - (bws_access_token is not defined or bws_access_token == "")
+        - not macmini_bws_token_stat.stat.exists
       tags: [mini-secrets, mini-komodo]
 
     - name: Check if bws CLI is installed
@@ -284,14 +297,67 @@
       become: no
       tags: [mini-secrets]
 
-    - name: Write BWS access token to disk
+    - name: Ensure durable token directory exists
+      file:
+        path: "{{ bws_token_dir }}"
+        state: directory
+        owner: root
+        group: wheel
+        mode: "0700"
+      become: yes
+      tags: [mini-secrets]
+
+    - name: Write bootstrap BWS access token to durable disk path
       copy:
         content: "{{ bws_access_token }}"
-        dest: "/Users/{{ target_user }}/.bws-secret"
-        owner: "{{ target_user }}"
+        dest: "{{ bws_token_file }}"
+        owner: root
+        group: wheel
         mode: '0600'
-      become: no
+      become: yes
       no_log: true
+      when: bws_access_token is defined and bws_access_token != ""
+      tags: [mini-secrets]
+
+    - name: Resolve BWS token secret UUID for durable host token
+      set_fact:
+        komodo_bws_access_token_ro_bws_uuid_effective: "{{ lookup('vars', 'komodo_bws_access_token_ro_bws_uuid', default='') }}"
+      tags: [mini-secrets]
+
+    - name: Fetch durable BWS token from Bitwarden
+      shell: |
+        set -euo pipefail
+        /usr/local/bin/bws secret get "{{ komodo_bws_access_token_ro_bws_uuid_effective }}" \
+          --access-token "$(sudo cat '{{ bws_token_file }}')" | jq -r .value | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+      register: macmini_bws_durable_token
+      changed_when: false
+      no_log: true
+      become: no
+      when: komodo_bws_access_token_ro_bws_uuid_effective | length > 0
+      tags: [mini-secrets]
+
+    - name: Write durable BWS token file from Bitwarden secret
+      copy:
+        content: "{{ macmini_bws_durable_token.stdout }}"
+        dest: "{{ bws_token_file }}"
+        owner: root
+        group: wheel
+        mode: "0600"
+      become: yes
+      no_log: true
+      when:
+        - komodo_bws_access_token_ro_bws_uuid_effective | length > 0
+        - (macmini_bws_durable_token.stdout | default('') | length) > 0
+      tags: [mini-secrets]
+
+    - name: Keep legacy BWS token path for existing scripts
+      copy:
+        remote_src: true
+        src: "{{ bws_token_file }}"
+        dest: "{{ bws_token_legacy_file }}"
+        owner: "{{ target_user }}"
+        mode: "0600"
+      become: yes
       tags: [mini-secrets]
 
     - name: Create Periphery root directory (stack clones, runner-secrets)
