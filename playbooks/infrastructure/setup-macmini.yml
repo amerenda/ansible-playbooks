@@ -48,6 +48,10 @@
     bws_token_dir: "/etc/komodo/secrets"
     bws_token_file: "{{ bws_token_dir }}/bws-access-token"
     bws_token_legacy_file: "/Users/{{ target_user }}/.bws-secret"
+    # Fallback when group_vars/macmini_hosts.yml is missing, stale, or sets an empty list.
+    _macmini_gitops_dirty_defaults:
+      - mac-mini-m4/komodo/compose.env
+      - mac-mini-m4/runners/compose.env.example
 
   tasks:
     # ─── Homebrew ──────────────────────────────────────────────────────────
@@ -237,12 +241,109 @@
       when: not compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets, mini-dns, macmini]
 
-    - name: Pull latest komodo-dean-gitops (stash local changes from secret injection)
-      shell: "git -C {{ compose_dir }} stash && git -C {{ compose_dir }} pull --ff-only && git -C {{ compose_dir }} stash pop || true"
+    # Align existing checkout to origin/main. Unexpected dirty files fail; paths in
+    # macmini_gitops_allowlisted_dirty_paths are stashed around checkout/pull then restored.
+    - name: Fetch komodo-dean-gitops from origin
+      command: git fetch origin
+      args:
+        chdir: "{{ compose_dir }}"
       become: no
       changed_when: false
       when: compose_repo_check.stat.exists
       tags: [mini-komodo, mini-secrets, mini-dns, macmini]
+
+    # Allowlist is written with `copy` (controller-side Jinja). Passing multiline values in
+    # `environment` is unreliable: Ansible/SSH serialization often drops newlines, leaving an
+    # empty allowlist on the target (see module stderr: Allowlist: with nothing).
+    - name: Resolve effective GitOps dirty-path allowlist (group_vars or playbook defaults)
+      ansible.builtin.set_fact:
+        macmini_gitops_allowlist_for_sync: >-
+          {{
+            _macmini_gitops_dirty_defaults
+            if (macmini_gitops_allowlisted_dirty_paths | default([]) | length) == 0
+            else macmini_gitops_allowlisted_dirty_paths
+          }}
+      when: compose_repo_check.stat.exists
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
+
+    - name: Require non-empty resolved GitOps dirty-path allowlist
+      assert:
+        that:
+          - macmini_gitops_allowlist_for_sync | length > 0
+        fail_msg: >-
+          macmini_gitops_allowlist_for_sync is empty after resolving group_vars and playbook defaults.
+      when: compose_repo_check.stat.exists
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
+
+    - name: Stage GitOps dirty-path allowlist for main sync
+      copy:
+        dest: /tmp/.ansible-macmini-gitops-allowlist
+        content: "{{ macmini_gitops_allowlist_for_sync | join('\n') }}\n"
+        mode: "0600"
+      when: compose_repo_check.stat.exists
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
+
+    - name: Checkout main and fast-forward to origin/main (komodo-dean-gitops)
+      environment:
+        MACMINI_COMPOSE_DIR: "{{ compose_dir }}"
+      shell: |
+        set -eo pipefail
+        allowlist=()
+        while IFS= read -r item; do
+          [ -z "$item" ] && continue
+          allowlist+=("$item")
+        done < /tmp/.ansible-macmini-gitops-allowlist
+        rm -f /tmp/.ansible-macmini-gitops-allowlist
+        stashing_paths=()
+        _porcelain="$(mktemp)"
+        git status --porcelain > "$_porcelain"
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          path="${line:3}"
+          allowed=0
+          for a in "${allowlist[@]}"; do
+            if [ "$path" = "$a" ]; then
+              allowed=1
+              break
+            fi
+          done
+          if [ "$allowed" -eq 0 ]; then
+            echo "Ansible refused: unexpected dirty path (not in macmini_gitops_allowlisted_dirty_paths): $path" >&2
+            echo "Allowlist: ${allowlist[*]}" >&2
+            git status --short >&2
+            rm -f "$_porcelain"
+            exit 2
+          fi
+          stashing_paths+=("$path")
+        done < "$_porcelain"
+        rm -f "$_porcelain"
+
+        did_stash=0
+        n_stash=0
+        for __ in "${stashing_paths[@]}"; do n_stash=$((n_stash + 1)); done
+        if [ "$n_stash" -gt 0 ]; then
+          git stash push -m "ansible setup-macmini: allowlisted paths before main sync" -- "${stashing_paths[@]}"
+          did_stash=1
+        fi
+        git checkout main
+        git pull --ff-only origin main
+        if [ "$did_stash" -eq 1 ]; then
+          git stash pop || {
+            echo "git stash pop failed — resolve conflicts under ${MACMINI_COMPOSE_DIR} (secrets vs main)." >&2
+            exit 3
+          }
+        fi
+      args:
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
+      become: no
+      register: komodo_gitops_sync
+      when: compose_repo_check.stat.exists
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
+      changed_when: >-
+        komodo_gitops_sync.rc == 0 and
+        ( 'Already up to date' not in (komodo_gitops_sync.stdout | default(''))
+          and 'Already up to date' not in (komodo_gitops_sync.stderr | default('')) )
 
     - name: Write llm agent unified-memory size (host DRAM for library / scheduler fits)
       copy:
