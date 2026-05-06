@@ -22,8 +22,12 @@
 #   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-bluebubbles — Install BlueBubbles iMessage proxy
-#   mini-dns        — pf DNS redirect + socat UDP proxy for Technitium
+#   mini-dns        — pf DNS redirect + dns-udp-proxy.py for Technitium (no BWS token needed)
 #   mini-summary    — Show setup summary
+#
+# DNS proxy only (pulls komodo-dean-gitops on the Mini, reinstalls LaunchDaemons, restarts):
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
+#     --limit mac-mini-m4 --tags mini-dns
 
 - name: Setup Mac Mini M4 as Docker host
   hosts: macmini_hosts
@@ -222,7 +226,7 @@
       stat:
         path: "{{ compose_dir }}/.git"
       register: compose_repo_check
-      tags: [mini-komodo, mini-secrets, mini-dns]
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
 
     - name: Clone komodo-dean-gitops repo
       git:
@@ -231,14 +235,14 @@
         version: main
       become: no
       when: not compose_repo_check.stat.exists
-      tags: [mini-komodo, mini-secrets, mini-dns]
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
 
     - name: Pull latest komodo-dean-gitops (stash local changes from secret injection)
       shell: "git -C {{ compose_dir }} stash && git -C {{ compose_dir }} pull --ff-only && git -C {{ compose_dir }} stash pop || true"
       become: no
       changed_when: false
       when: compose_repo_check.stat.exists
-      tags: [mini-komodo, mini-secrets, mini-dns]
+      tags: [mini-komodo, mini-secrets, mini-dns, macmini]
 
     - name: Write llm agent unified-memory size (host DRAM for library / scheduler fits)
       copy:
@@ -772,12 +776,27 @@
           Android: Install BlueBubbles from Google Play, connect to {{ macmini_ip }}:1234
       tags: [mini-bluebubbles]
 
-    # ─── DNS / pf redirect + Python UDP proxy ─────────────────────────────
-    # pf-dns-redirect.sh: redirects UDP DNS_PORT → LAN_IP:5355 (same IP,
-    # unique port macOS delivers locally). dns-udp-proxy.py: listens on
-    # :5355 and forwards UDP to OrbStack VM (192.168.139.2:5354/Technitium).
-    # OrbStack already handles TCP on *:5354.
-    # Cutover: set DNS_PORT=53 in pf-dns-redirect.sh when ready.
+    # ─── DNS / pf redirect + Python DNS proxy ─────────────────────────────
+    # pf-dns-redirect.sh: pf rdr sends DNS (UDP+TCP) for 10.100.20.240:53 →
+    # 10.100.20.240:15354. dns-udp-proxy.py forwards to OrbStack VM
+    # (192.168.139.2:5354) where Technitium listens (host network).
+    # LaunchDaemons install from the Mini's git checkout (remote_src: yes);
+    # git pull runs under mini-komodo / mini-secrets / mini-dns tags first.
+
+    - name: Require dns-udp-proxy script in GitOps checkout
+      stat:
+        path: "{{ macmini_compose_dir }}/scripts/dns-udp-proxy.py"
+      register: dns_udp_proxy_script
+      tags: [mini-dns, macmini]
+
+    - name: Fail if dns-udp-proxy.py is missing on the Mini
+      fail:
+        msg: |
+          Expected {{ macmini_compose_dir }}/scripts/dns-udp-proxy.py after git clone/pull.
+          On the Mini: ensure {{ compose_dir }} exists and `git pull` succeeds, then re-run
+          with --tags mini-dns (or full setup-macmini).
+      when: not dns_udp_proxy_script.stat.exists
+      tags: [mini-dns, macmini]
 
     - name: Enable IP forwarding persistently via /etc/sysctl.conf
       lineinfile:
@@ -788,13 +807,13 @@
         group: wheel
         mode: '0644'
       become: yes
-      tags: [mini-dns]
+      tags: [mini-dns, macmini]
 
     - name: Enable IP forwarding immediately (runtime)
       command: sysctl -w net.inet.ip.forwarding=1
       become: yes
       changed_when: false
-      tags: [mini-dns]
+      tags: [mini-dns, macmini]
 
     - name: Install pf-dns-redirect LaunchDaemon
       copy:
@@ -805,15 +824,7 @@
         mode: '0644'
         remote_src: yes
       become: yes
-      tags: [mini-dns]
-
-    - name: Load pf-dns-redirect LaunchDaemon
-      shell: |
-        launchctl unload /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || true
-        launchctl load /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
-      become: yes
-      changed_when: false
-      tags: [mini-dns]
+      tags: [mini-dns, macmini]
 
     - name: Install dns-udp-proxy LaunchDaemon
       copy:
@@ -824,16 +835,29 @@
         mode: '0644'
         remote_src: yes
       become: yes
-      tags: [mini-dns]
+      tags: [mini-dns, macmini]
 
-    - name: Load dns-udp-proxy LaunchDaemon
+    - name: Restart pf-dns-redirect LaunchDaemon
       shell: |
-        launchctl unload /Library/LaunchDaemons/com.local.socat-dns-proxy.plist 2>/dev/null || true
-        launchctl unload /Library/LaunchDaemons/com.local.dns-udp-proxy.plist 2>/dev/null || true
-        launchctl load /Library/LaunchDaemons/com.local.dns-udp-proxy.plist
+        launchctl bootout system /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.pf-dns-redirect.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.pf-dns-redirect.plist
       become: yes
       changed_when: false
-      tags: [mini-dns]
+      tags: [mini-dns, macmini]
+
+    - name: Restart dns-udp-proxy LaunchDaemon
+      shell: |
+        launchctl bootout system /Library/LaunchDaemons/com.local.socat-dns-proxy.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.socat-dns-proxy.plist 2>/dev/null || true
+        launchctl bootout system /Library/LaunchDaemons/com.local.dns-udp-proxy.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.dns-udp-proxy.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.dns-udp-proxy.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.dns-udp-proxy.plist
+      become: yes
+      changed_when: false
+      tags: [mini-dns, macmini]
 
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary

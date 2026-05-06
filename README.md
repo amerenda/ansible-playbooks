@@ -176,6 +176,12 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/smoke-test.
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
   -e bws_access_token=<TOKEN>
 
+# Mac Mini — DNS proxy + pf redirect only (Technitium path via dns-udp-proxy.py).
+# Pulls komodo-dean-gitops on the Mini, copies LaunchDaemons from that checkout, restarts services.
+# No Bitwarden token required. Run from any machine with SSH to the Mini:
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
+  --limit mac-mini-m4 --tags mini-dns
+
 # Komodo Periphery on murderbot (Debian) — same BWS / passkey patterns as archlinux
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-debian-komodo.yml \
   --extra-vars "bws_access_token=<TOKEN>"
@@ -219,7 +225,7 @@ for `computers` / workstation lists in `group_vars/computers.yml` and re-run the
 | `enable-etcd-metrics.yml` | Adds `--etcd-expose-metrics=true` to k3s config | `serial: 1` + health gate |
 | `fetch-secrets.yml` | Fetches secrets from BWS and sets facts for subsequent plays | Non-disruptive |
 | `docker-storage.yml` | Moves Docker data root to `/mnt/storage` on GPU hosts | GPU hosts only |
-| `setup-macmini.yml` | OrbStack, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull` | Mac Mini only |
+| `setup-macmini.yml` | OrbStack, Komodo, Tailscale, BlueBubbles on Mac Mini; installs passwordless `sudo /bin/launchctl kickstart … inject-secrets` so `sync-stacks.sh` can re-run secrets after host `git pull`; **`--tags mini-dns`** refreshes pf + `dns-udp-proxy` LaunchDaemons from the Mini’s `komodo-dean-gitops` clone | Mac Mini only |
 | `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts` (+ `group_vars/computers.yml`); first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
 | `setup-debian-komodo.yml` | Murderbot (Debian): Docker + Periphery + `compose.env` from BWS; force-recreates Periphery on re-run (same passkey hygiene as Arch) | Group `murderbot_komodo_hosts`; token like `setup-archlinux-komodo` |
 | `sysctl-tuning.yml` | Raises inotify limits on `k3s` + `gpu_k3s` hosts for many pods/watchers | Non-disruptive; see playbook for `--limit` |
