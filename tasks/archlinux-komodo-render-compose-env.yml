@@ -3,6 +3,17 @@
 # Required vars (set by parent play): komodo_dir, bws_token_file,
 # komodo_periphery_passkey_bws_uuid (from group_vars/computers.yml).
 
+- name: Resolve Komodo periphery passkey UUID
+  ansible.builtin.set_fact:
+    komodo_periphery_passkey_bws_uuid_effective: >-
+      {{
+        lookup(
+          'vars',
+          'komodo_periphery_passkey_bws_uuid',
+          default='239d3146-6227-4e87-a56b-b417012a693c'
+        )
+      }}
+
 - name: Render archlinux/komodo/compose.env from compose.env.example
   ansible.builtin.shell: |
     set -euo pipefail
@@ -58,7 +69,7 @@
     example_path = pathlib.Path("{{ komodo_dir }}/compose.env.example")
     out_path = pathlib.Path("{{ komodo_dir }}/compose.env")
     bws_bin = "/usr/local/bin/bws"
-    secret_uuid = "{{ komodo_periphery_passkey_bws_uuid }}"
+    secret_uuid = "{{ komodo_periphery_passkey_bws_uuid_effective }}"
     marker = "ANSIBLE_WILL_REPLACE_THIS"
 
     if not example_path.is_file():

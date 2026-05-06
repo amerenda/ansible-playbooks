@@ -1,0 +1,24 @@
+---
+# One-shot: set docker group GID on Arch k3s agents so ARC runner pods can use the host Docker socket.
+# Included from setup-archlinux-komodo.yml; run alone when you skip full Komodo bootstrap.
+#
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/setup-archlinux-arc-docker.yml --limit archlinux
+#
+# Requires: Docker installed (pacman -S docker), group `docker` exists.
+
+- name: ARC Docker socket GID on Arch k3s agents
+  hosts: archlinux_k3s
+  become: yes
+  gather_facts: yes
+  tags: [archlinux, arc-docker, k3s]
+
+  tasks:
+    - name: Ensure Docker is installed (provides docker group)
+      community.general.pacman:
+        name: docker
+        state: present
+      when: ansible_distribution == 'Archlinux'
+
+    - name: Align docker group GID for ARC runners
+      ansible.builtin.import_tasks: ../../tasks/archlinux-arc-docker-gid.yml

@@ -1,0 +1,17 @@
+---
+# Configure NVIDIA/AMD host GPU runtime prerequisites for Docker workloads.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-gpu-runtime.yml
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-gpu-runtime.yml --limit murderbot
+
+- name: Setup GPU runtime on GPU hosts
+  hosts: gpu_hosts
+  become: yes
+  gather_facts: yes
+  tags: [gpu, gpu-runtime]
+
+  tasks:
+    - name: Configure GPU runtime prerequisites
+      ansible.builtin.include_tasks: ../../tasks/gpu-runtime-setup.yml
+      tags: [gpu, gpu-runtime]

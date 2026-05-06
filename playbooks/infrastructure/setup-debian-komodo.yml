@@ -33,17 +33,20 @@
     bws_token_durable_file: "{{ bws_token_dir }}/bws-access-token"
     komodo_periphery_service_name: "komodo-periphery"
     komodo_periphery_port: 8120
+    media_server_stack_enabled: true
 
   pre_tasks:
     - name: Stat existing BWS token on host (legacy path)
       ansible.builtin.stat:
         path: "{{ bws_token_file }}"
       register: bws_secret_stat
+      tags: [always]
 
     - name: Stat existing BWS token on host (durable path)
       ansible.builtin.stat:
         path: "{{ bws_token_durable_file }}"
       register: bws_secret_durable_stat
+      tags: [always]
 
     - name: Fail if no BWS token on host and none passed in
       ansible.builtin.fail:
@@ -55,6 +58,7 @@
         - not bws_secret_stat.stat.exists
         - not bws_secret_durable_stat.stat.exists
         - bws_access_token is not defined or (bws_access_token | default('') | length) == 0
+      tags: [always]
 
   tasks:
     - name: Resolve media path defaults
@@ -103,12 +107,115 @@
         DEBIAN_FRONTEND: noninteractive
       tags: [debian-komodo, debian-periphery]
 
-    - name: Enable and start Docker
-      systemd:
-        name: docker
-        enabled: yes
-        state: started
+    - name: Ensure Docker daemon has valid userland-proxy path (Debian docker.io)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 <<'PY'
+        import json
+        from pathlib import Path
+
+        p = Path("/etc/docker/daemon.json")
+        if p.exists():
+            data = json.loads(p.read_text())
+        else:
+            data = {}
+
+        # Debian docker.io expects docker-proxy here when userland-proxy is enabled.
+        # Keep existing keys (nvidia runtime, builder gc, data-root, etc.) intact.
+        target = "/usr/sbin/docker-proxy"
+        if data.get("userland-proxy-path") == target:
+            print("unchanged")
+        else:
+            data["userland-proxy-path"] = target
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, indent=4) + "\n")
+            print("updated")
+        PY
+      args:
+        executable: /bin/bash
+      register: docker_proxy_path_fix
+      changed_when: "'updated' in (docker_proxy_path_fix.stdout | default(''))"
       tags: [debian-komodo, debian-periphery]
+
+    - name: Enable and start Docker
+      block:
+        - name: Start Docker service
+          ansible.builtin.systemd:
+            name: docker
+            enabled: yes
+            state: started
+          tags: [debian-komodo, debian-periphery]
+      rescue:
+        - name: Read recent Docker journal for startup failure diagnosis
+          ansible.builtin.command: journalctl -u docker --no-pager -n 200
+          register: docker_journal_tail
+          changed_when: false
+          failed_when: false
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Detect stale docker0 bridge conflict
+          ansible.builtin.set_fact:
+            docker_bridge_conflict_detected: >-
+              {{
+                'networks have same bridge name' in (docker_journal_tail.stdout | default(''))
+                and '(docker0)' in (docker_journal_tail.stdout | default(''))
+              }}
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Ensure Docker network state dir exists
+          ansible.builtin.file:
+            path: /var/lib/docker/network/files
+            state: directory
+            mode: "0755"
+          when: docker_bridge_conflict_detected | bool
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Check stale Docker bridge state database
+          ansible.builtin.stat:
+            path: /var/lib/docker/network/files/local-kv.db
+          register: docker_local_kv_db
+          when: docker_bridge_conflict_detected | bool
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Stop Docker before repairing stale network DB
+          ansible.builtin.systemd:
+            name: docker
+            state: stopped
+          failed_when: false
+          when: docker_bridge_conflict_detected | bool
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Backup stale local-kv.db
+          ansible.builtin.command: >-
+            mv /var/lib/docker/network/files/local-kv.db
+            /var/lib/docker/network/files/local-kv.db.bak.{{ ansible_date_time.epoch }}
+          when:
+            - docker_bridge_conflict_detected | bool
+            - docker_local_kv_db.stat.exists | default(false)
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Reset Docker failed state
+          ansible.builtin.command: systemctl reset-failed docker
+          changed_when: false
+          failed_when: false
+          when: docker_bridge_conflict_detected | bool
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Retry Docker start after stale bridge cleanup
+          ansible.builtin.systemd:
+            name: docker
+            enabled: yes
+            state: started
+          when: docker_bridge_conflict_detected | bool
+          tags: [debian-komodo, debian-periphery]
+
+        - name: Fail when Docker startup issue is not auto-recoverable
+          ansible.builtin.fail:
+            msg: >-
+              Docker failed to start and no known auto-fix matched.
+              Check: systemctl status docker; journalctl -u docker -n 200.
+          when: not (docker_bridge_conflict_detected | bool)
+          tags: [debian-komodo, debian-periphery]
 
     - name: Add target user to docker group
       user:
@@ -116,6 +223,10 @@
         groups: docker
         append: yes
       tags: [debian-komodo, debian-periphery]
+
+    - name: Configure GPU runtime prerequisites (NVIDIA/AMD)
+      ansible.builtin.include_tasks: ../../tasks/gpu-runtime-setup.yml
+      tags: [debian-komodo, debian-periphery, debian-gpu]
 
     # ─── bws CLI on host (also used to render compose.env) ─────────────────
     - name: Detect host architecture for bws CLI
@@ -176,6 +287,7 @@
         mode: "0600"
       when:
         - (bws_access_token is not defined or (bws_access_token | default('') | length) == 0)
+        - bws_secret_durable_stat is defined
         - bws_secret_durable_stat.stat.exists
       tags: [debian-komodo, debian-bws, debian-periphery]
 
@@ -373,6 +485,40 @@
         - "{{ media_data_root_effective }}/cache/transcode"
       when: storage_mount.rc == 0
       tags: [debian-komodo, debian-media-dirs]
+
+    # ─── Media-server stack (murderbot): render env and ensure running ──────
+    - name: Render media-server .env from BWS
+      ansible.builtin.shell: |
+        set -euo pipefail
+        BWS_ACCESS_TOKEN="$(cat '{{ bws_token_file }}')" bash murderbot/media-server/pre-deploy.sh
+      args:
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
+      changed_when: true
+      when:
+        - media_server_stack_enabled | bool
+        - storage_mount.rc == 0
+      tags: [debian-komodo, debian-media-stack]
+
+    - name: Start media-server stack
+      ansible.builtin.shell: docker compose --env-file .env up -d --build
+      args:
+        chdir: "{{ compose_dir }}/murderbot/media-server"
+      changed_when: true
+      when:
+        - media_server_stack_enabled | bool
+        - storage_mount.rc == 0
+      tags: [debian-komodo, debian-media-stack]
+
+    - name: Wait for media-server HTTPS endpoint on :443
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 443
+        timeout: 90
+      when:
+        - media_server_stack_enabled | bool
+        - storage_mount.rc == 0
+      tags: [debian-komodo, debian-media-stack]
 
     # ─── Komodo Core: sync Variable to BWS passkey (fixes "Not Okay" / Invalid passkey) ─
     # Periphery already uses komodo-dean-passkey from BWS. Core must send the same

@@ -1,4 +1,10 @@
 ---
-# Longhorn data directory on Arch k3s agent (group `archlinux_k3s`).
-longhorn_host_disk_path: /mnt/storage/k3s
+# Longhorn on Arch k3s agents (group `archlinux_k3s`).
+# Canonical per-host values also live in inventory/host_vars/<hostname>.yml (higher precedence;
+# avoids rare cases where group-only vars are not visible inside blocks / local connection).
+longhorn_host_disk_path: /mnt/storage/longhorn
 longhorn_k8s_namespace: default
+
+# GitHub ARC runner pods use supplementalGroups: [989] (docker GID on Debian murderbot).
+# tasks/archlinux-arc-docker-gid.yml sets host group `docker` to this GID so /var/run/docker.sock works.
+arc_runner_docker_socket_gid: 989

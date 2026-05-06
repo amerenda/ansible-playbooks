@@ -1,0 +1,52 @@
+---
+# Manage a systemd unit that keeps Komodo Periphery compose stack available at boot.
+# Required vars:
+# - komodo_dir
+# Optional vars:
+# - komodo_periphery_service_name (default: komodo-periphery)
+# - komodo_periphery_port (default: 8120)
+
+- name: Resolve Komodo periphery service defaults
+  ansible.builtin.set_fact:
+    komodo_periphery_service_name_effective: "{{ komodo_periphery_service_name | default('komodo-periphery') }}"
+    komodo_periphery_port_effective: "{{ komodo_periphery_port | default(8120) }}"
+
+- name: Install systemd unit for Komodo Periphery compose stack
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ komodo_periphery_service_name_effective }}.service"
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Komodo Periphery (docker compose)
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory={{ komodo_dir }}
+      ExecStart=/usr/bin/docker compose -f compose.yaml --env-file compose.env up -d --remove-orphans
+      ExecStop=/usr/bin/docker compose -f compose.yaml --env-file compose.env down
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+  register: komodo_periphery_unit
+
+- name: Reload systemd daemon when unit file changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: komodo_periphery_unit.changed
+
+- name: Enable and start Komodo Periphery systemd service
+  ansible.builtin.systemd:
+    name: "{{ komodo_periphery_service_name_effective }}"
+    enabled: true
+    state: started
+
+- name: Verify Komodo Periphery port is listening
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ komodo_periphery_port_effective | int }}"
+    timeout: 90

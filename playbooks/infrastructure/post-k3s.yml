@@ -17,10 +17,17 @@
     flannel_taints:
       - "flannel.io/required=true:NoSchedule"
 
-    # archlinux: dedicated node — only pods that tolerate archlinux=true:NoSchedule schedule here
-    # (infra: flannel already tolerates all NoSchedule; add same to metallb/longhorn in GitOps values.)
+    # archlinux: optional label for nodeSelector / docs (no dedicated NoSchedule taint — ARC builders schedule here)
     archlinux_dedicated_label: "archlinux=true"
-    archlinux_dedicated_taint: "archlinux=true:NoSchedule"
+
+    # Longhorn: use explicit [storage] if set; otherwise inventory group longhorn_nodes (see inventory.ini).
+    # Without this, an empty [storage] made every host "non-storage" (stripped labels, allowScheduling=false).
+    longhorn_schedule_hosts: >-
+      {{
+        groups['storage']
+        if ('storage' in groups and groups['storage'] | length > 0)
+        else (groups['longhorn_nodes'] | default([]))
+      }}
 
   pre_tasks:
     - name: Check if k3s is installed
@@ -52,7 +59,7 @@
       delegate_to: localhost
       become: no
       changed_when: false
-      when: inventory_hostname in (groups['storage'] | default([]))
+      when: inventory_hostname in longhorn_schedule_hosts
       loop: "{{ longhorn_labels }}"
       tags: [k3s, labels, longhorn, storage]
 
@@ -62,7 +69,7 @@
       delegate_to: localhost
       become: no
       changed_when: false
-      when: inventory_hostname not in (groups['storage'] | default([]))
+      when: inventory_hostname not in longhorn_schedule_hosts
       loop: "{{ longhorn_labels }}"
       tags: [k3s, labels, longhorn]
 
@@ -116,7 +123,7 @@
       loop: "{{ flannel_taints }}"
       tags: [k3s, taints]
 
-    # ARCHLINUX DEDICATED (infra only unless pod tolerates archlinux=true:NoSchedule)
+    # ARCHLINUX LABEL (taints removed — workloads use nodeSelector archlinux=true if they must land here)
     - name: Label archlinux dedicated node
       shell: |
         kubectl label node {{ inventory_hostname }} {{ archlinux_dedicated_label }} --overwrite
@@ -135,9 +142,9 @@
       when: inventory_hostname not in (groups['archlinux_k3s'] | default([]))
       tags: [k3s, labels, archlinux]
 
-    - name: Taint archlinux dedicated node (NoSchedule unless workload tolerates archlinux=true)
+    - name: Remove archlinux dedicated taint from archlinux_k3s nodes (idempotent)
       shell: |
-        kubectl taint node {{ inventory_hostname }} {{ archlinux_dedicated_taint }} --overwrite
+        kubectl taint node {{ inventory_hostname }} archlinux=true:NoSchedule- || true
       delegate_to: localhost
       become: no
       changed_when: false
@@ -160,7 +167,7 @@
       delegate_to: localhost
       become: no
       changed_when: false
-      when: inventory_hostname in (groups['storage'] | default([]))
+      when: inventory_hostname in longhorn_schedule_hosts
       tags: [k3s, longhorn, storage]
 
     - name: Disable Longhorn scheduling on non-storage nodes
@@ -169,33 +176,88 @@
       delegate_to: localhost
       become: no
       changed_when: false
-      when: inventory_hostname not in (groups['storage'] | default([]))
+      when: inventory_hostname not in longhorn_schedule_hosts
       tags: [k3s, longhorn, storage]
 
-    # archlinux: Longhorn default disk path on /mnt/storage (see group_vars/archlinux_k3s.yml)
+    # archlinux: Longhorn disk path (see group_vars/archlinux_k3s.yml). Manager pod nsenters host for iscsiadm.
+    - name: Check iscsiadm on archlinux host (required by longhorn-manager)
+      ansible.builtin.command:
+        argv: [iscsiadm, --version]
+      register: longhorn_arch_iscsiadm
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
+      tags: [k3s, longhorn, archlinux]
+
+    - name: Fail with install hint if iscsiadm missing on archlinux
+      ansible.builtin.fail:
+        msg: >-
+          Longhorn manager needs open-iscsi on the host (iscsiadm). Without it the manager
+          CrashLoops and no nodes.longhorn.io/{{ inventory_hostname }} CR is created.
+          Run: ansible-playbook -i inventory/inventory.ini
+          playbooks/infrastructure/longhorn-storage.yml --limit {{ inventory_hostname }}
+      when:
+        - inventory_hostname in (groups['archlinux_k3s'] | default([]))
+        - longhorn_arch_iscsiadm is not skipped
+        - longhorn_arch_iscsiadm.rc | default(-1) != 0
+      tags: [k3s, longhorn, archlinux]
+
+    # kubectl on archlinux (not delegate_to localhost): kubeconfig + group_vars/host_vars apply here.
     - name: Configure Longhorn disk path on archlinux
       when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
       tags: [k3s, longhorn, archlinux]
-      delegate_to: localhost
       become: false
       block:
-        - name: Wait for Longhorn Node CR and disks on archlinux
+        # Block-local facts: lookup('vars') avoids undefined-name errors when group_vars merge is odd.
+        - name: Resolve Longhorn path facts for this block
+          ansible.builtin.set_fact:
+            lh_arch_longhorn_path: "{{ lookup('vars', 'longhorn_host_disk_path', default='/mnt/storage/longhorn') }}"
+            lh_arch_longhorn_ns: "{{ lookup('vars', 'longhorn_k8s_namespace', default='default') }}"
+
+        # Longhorn Node CR can exist with spec.disks: {} when defaultDiskSelector requires a tagged disk
+        # (see k3s-dean-gitops infra/longhorn/values.yaml defaultDiskSelector: storage).
+        - name: Wait for Longhorn Node CR on archlinux
           ansible.builtin.command: >-
             kubectl get nodes.longhorn.io {{ inventory_hostname }}
-            -n {{ longhorn_k8s_namespace | default('default') }}
+            -n {{ lh_arch_longhorn_ns }}
             -o json
           register: lh_arch_node
           until: >-
             lh_arch_node.rc == 0
             and lh_arch_node.stdout | length > 0
-            and (
-              (lh_arch_node.stdout | from_json).spec is defined
-              and (lh_arch_node.stdout | from_json).spec.disks is defined
-              and (lh_arch_node.stdout | from_json).spec.disks | length > 0
-            )
+            and (lh_arch_node.stdout | from_json).metadata is defined
+            and (lh_arch_node.stdout | from_json).metadata.name == inventory_hostname
           retries: 36
           delay: 10
           changed_when: false
+
+        - name: Add default-disk on archlinux when Longhorn has no disks
+          ansible.builtin.shell: >-
+            kubectl patch nodes.longhorn.io {{ inventory_hostname }}
+            -n {{ lh_arch_longhorn_ns }}
+            --type merge
+            -p "{\"spec\":{\"disks\":{\"default-disk\":{\"path\":\"{{ lh_arch_longhorn_path }}\",\"allowScheduling\":true,\"tags\":[\"storage\"]}}}}"
+          register: lh_arch_add_disk
+          changed_when: "'patched' in (lh_arch_add_disk.stdout | default(''))"
+          failed_when: lh_arch_add_disk.rc != 0
+          when: >-
+            (lh_arch_node.stdout | from_json).spec.disks | default({}) | dict2items | length == 0
+
+        - name: Re-fetch Longhorn Node archlinux after disk create
+          ansible.builtin.command: >-
+            kubectl get nodes.longhorn.io {{ inventory_hostname }}
+            -n {{ lh_arch_longhorn_ns }}
+            -o json
+          register: lh_arch_node
+          changed_when: false
+
+        - name: Fail if Longhorn Node archlinux still has no disks
+          ansible.builtin.fail:
+            msg: >-
+              Longhorn Node spec.disks is still empty (defaultDiskSelector may reject the disk).
+              kubectl describe nodes.longhorn.io {{ inventory_hostname }} -n {{ lh_arch_longhorn_ns }}
+          when: >-
+            (lh_arch_node.stdout | from_json).spec.disks | default({}) | dict2items | length == 0
 
         - name: Resolve Longhorn disk key on archlinux
           ansible.builtin.set_fact:
@@ -213,17 +275,17 @@
               - patch
               - nodes.longhorn.io/{{ inventory_hostname }}
               - -n
-              - "{{ longhorn_k8s_namespace | default('default') }}"
+              - "{{ lh_arch_longhorn_ns }}"
               - --type=json
               - -p
               - >-
-                [{"op":"replace","path":"/spec/disks/{{ lh_arch_disk_name }}/path","value":"{{ longhorn_host_disk_path }}"}]
+                [{"op":"replace","path":"/spec/disks/{{ lh_arch_disk_name }}/path","value":"{{ lh_arch_longhorn_path }}"}]
           register: lh_arch_patch
           changed_when: lh_arch_patch.rc == 0
           failed_when: lh_arch_patch.rc != 0
           when: >-
             (lh_arch_node.stdout | from_json).spec.disks[lh_arch_disk_name].path | default('')
-            != longhorn_host_disk_path
+            != lh_arch_longhorn_path
 
     - name: Add rpi5 hosts labels to rpi5 hosts
       shell: |

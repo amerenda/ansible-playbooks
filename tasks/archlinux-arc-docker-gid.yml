@@ -1,0 +1,54 @@
+---
+# Align host `docker` group GID with k3s-dean-gitops ARC runner pods (`supplementalGroups: [989]`).
+# Run after Docker is installed so group `docker` exists. Requires become.
+#
+# Variable: arc_runner_docker_socket_gid (optional; defaults to 989 for ARC compatibility).
+
+- name: Resolve target docker socket GID for ARC
+  ansible.builtin.set_fact:
+    arc_runner_docker_socket_gid_effective: "{{ arc_runner_docker_socket_gid | default(989) | int }}"
+
+- name: Require resolved docker socket GID
+  ansible.builtin.assert:
+    that:
+      - arc_runner_docker_socket_gid_effective > 0
+
+- name: Stat docker group
+  ansible.builtin.command: getent group docker
+  register: arc_getent_docker
+  changed_when: false
+  failed_when: arc_getent_docker.rc != 0
+
+- name: Fail if target GID is reserved by another group
+  ansible.builtin.shell: |
+    set -euo pipefail
+    line=$(getent group "{{ arc_runner_docker_socket_gid_effective }}" || true)
+    if [ -z "$line" ]; then exit 0; fi
+    name=$(echo "$line" | cut -d: -f1)
+    if [ "$name" = "docker" ]; then exit 0; fi
+    echo "GID {{ arc_runner_docker_socket_gid_effective }} is already used by group: ${name}" >&2
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Set docker group GID to match ARC runner supplementalGroups
+  ansible.builtin.group:
+    name: docker
+    gid: "{{ arc_runner_docker_socket_gid_effective }}"
+  register: arc_docker_group_gid_task
+
+- name: Restart Docker after docker group GID change
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when: arc_docker_group_gid_task.changed | default(false)
+
+- name: Wait for docker.sock to match docker group GID
+  ansible.builtin.command: stat -c '%g' /var/run/docker.sock
+  register: arc_sock_gid
+  until: arc_sock_gid.stdout | trim | int == arc_runner_docker_socket_gid_effective
+  retries: 15
+  delay: 2
+  changed_when: false
+  when: arc_docker_group_gid_task.changed | default(false)

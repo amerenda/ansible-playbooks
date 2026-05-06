@@ -1,0 +1,142 @@
+---
+# Configure host GPU runtime prerequisites for Docker workloads.
+# Supports NVIDIA and AMD on Debian + Arch Linux.
+# Safe to run repeatedly.
+
+- name: Detect GPU vendors from PCI vendor IDs
+  ansible.builtin.shell: |
+    set -euo pipefail
+    nvidia=0
+    amd=0
+    for f in /sys/bus/pci/devices/*/vendor; do
+      [ -f "$f" ] || continue
+      v="$(cat "$f" 2>/dev/null || true)"
+      [ "$v" = "0x10de" ] && nvidia=1
+      [ "$v" = "0x1002" ] && amd=1
+    done
+    echo "nvidia=${nvidia}"
+    echo "amd=${amd}"
+  args:
+    executable: /bin/bash
+  register: gpu_vendor_detect
+  changed_when: false
+  tags: [gpu, gpu-detect]
+
+- name: Set GPU detection facts
+  ansible.builtin.set_fact:
+    has_nvidia_gpu: "{{ 'nvidia=1' in (gpu_vendor_detect.stdout | default('')) }}"
+    has_amd_gpu: "{{ 'amd=1' in (gpu_vendor_detect.stdout | default('')) }}"
+  tags: [gpu, gpu-detect]
+
+- name: Install NVIDIA runtime packages (Debian)
+  ansible.builtin.apt:
+    name:
+      - nvidia-driver
+      - nvidia-container-toolkit
+    state: present
+    update_cache: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when:
+    - has_nvidia_gpu
+    - ansible_os_family == 'Debian'
+  tags: [gpu, nvidia]
+
+- name: Install AMD runtime/video packages (Debian)
+  ansible.builtin.apt:
+    name:
+      - firmware-amd-graphics
+      - mesa-va-drivers
+      - vainfo
+    state: present
+    update_cache: yes
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when:
+    - has_amd_gpu
+    - ansible_os_family == 'Debian'
+  tags: [gpu, amd]
+
+- name: Install NVIDIA runtime packages (Arch Linux)
+  community.general.pacman:
+    name:
+      - nvidia
+      - nvidia-utils
+      - nvidia-container-toolkit
+    state: present
+    update_cache: yes
+  when:
+    - has_nvidia_gpu
+    - ansible_distribution == 'Archlinux'
+  tags: [gpu, nvidia]
+
+- name: Install AMD runtime/video packages (Arch Linux)
+  community.general.pacman:
+    name:
+      - mesa
+      - libva-mesa-driver
+      - libva-utils
+      - vulkan-radeon
+    state: present
+    update_cache: yes
+  when:
+    - has_amd_gpu
+    - ansible_distribution == 'Archlinux'
+  tags: [gpu, amd]
+
+- name: Capture Docker daemon config checksum before NVIDIA runtime registration
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  register: gpu_daemon_json_pre
+  when: has_nvidia_gpu
+  tags: [gpu, nvidia]
+
+- name: Register NVIDIA runtime with Docker
+  ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+  register: gpu_nvidia_ctk
+  changed_when: false
+  failed_when: false
+  when: has_nvidia_gpu
+  tags: [gpu, nvidia]
+
+- name: Capture Docker daemon config checksum after NVIDIA runtime registration
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  register: gpu_daemon_json_post
+  when: has_nvidia_gpu
+  tags: [gpu, nvidia]
+
+- name: Restart Docker when NVIDIA runtime config changed
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when:
+    - has_nvidia_gpu
+    - (gpu_daemon_json_pre.stat.checksum | default('')) != (gpu_daemon_json_post.stat.checksum | default(''))
+  tags: [gpu, nvidia]
+
+- name: Verify NVIDIA driver userspace
+  ansible.builtin.command: nvidia-smi -L
+  register: gpu_nvidia_smi
+  changed_when: false
+  failed_when: false
+  when: has_nvidia_gpu
+  tags: [gpu, nvidia]
+
+- name: Verify VAAPI userspace for AMD
+  ansible.builtin.command: vainfo
+  register: gpu_amd_vainfo
+  changed_when: false
+  failed_when: false
+  when: has_amd_gpu
+  tags: [gpu, amd]
+
+- name: Show GPU runtime summary
+  ansible.builtin.debug:
+    msg: |
+      GPU detection:
+        NVIDIA: {{ has_nvidia_gpu }}
+        AMD: {{ has_amd_gpu }}
+      NVIDIA check (nvidia-smi rc): {{ gpu_nvidia_smi.rc | default('n/a') }}
+      AMD check (vainfo rc): {{ gpu_amd_vainfo.rc | default('n/a') }}
+  tags: [gpu]

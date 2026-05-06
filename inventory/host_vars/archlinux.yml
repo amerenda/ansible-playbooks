@@ -1,0 +1,5 @@
+---
+# Longhorn on this k3s agent (inventory host archlinux).
+# Host vars merge reliably for ansible_connection=local; group_vars/archlinux_k3s.yml mirrors these.
+longhorn_host_disk_path: /mnt/storage/longhorn
+longhorn_k8s_namespace: default
