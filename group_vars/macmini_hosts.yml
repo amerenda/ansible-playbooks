@@ -7,6 +7,12 @@
 macmini_ip: "10.100.20.18"
 gateway: "10.100.20.1"
 
+# Tracked paths under komodo-dean-gitops that may differ on disk (inject-secrets, local edits).
+# setup-macmini stashes only these before checkout/pull, then stash pop — any other dirty file fails the play.
+macmini_gitops_allowlisted_dirty_paths:
+  - mac-mini-m4/komodo/compose.env
+  - mac-mini-m4/runners/compose.env.example
+
 # Homebrew packages (macOS host tools)
 homebrew_packages:
   - git

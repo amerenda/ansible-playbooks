@@ -177,8 +177,9 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmi
   -e bws_access_token=<TOKEN>
 
 # Mac Mini — DNS proxy + pf redirect only (Technitium path via dns-udp-proxy.py).
-# Pulls komodo-dean-gitops on the Mini, copies LaunchDaemons from that checkout, restarts services.
-# No Bitwarden token required. Run from any machine with SSH to the Mini:
+# Fetches origin, checks out main, fast-forwards to origin/main. Tracked edits only under
+# `macmini_gitops_allowlisted_dirty_paths` (e.g. inject-secrets compose files) are stashed around the pull; anything else dirty fails.
+# Copies LaunchDaemons from that checkout and restarts services. No Bitwarden token required:
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-macmini.yml \
   --limit mac-mini-m4 --tags mini-dns
 
