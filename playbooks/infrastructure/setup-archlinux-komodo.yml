@@ -408,6 +408,7 @@
         - "{{ media_config_root_effective }}/prowlarr/config"
         - "{{ media_config_root_effective }}/sabnzbd/config"
         - "{{ media_config_root_effective }}/jellyfin/config"
+        - "{{ media_config_root_effective }}/seerr/config"
       tags: [arch-komodo, arch-media-dirs]
 
     - name: Verify /mnt/storage is mounted (out-of-band setup required)
