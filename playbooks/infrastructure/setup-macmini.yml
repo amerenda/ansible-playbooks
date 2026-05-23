@@ -148,6 +148,16 @@
       until: docker_ready.rc == 0
       tags: [mini-orbstack]
 
+    - name: Ensure OrbStack bin is in PATH for all shells (zshenv)
+      lineinfile:
+        path: "/Users/{{ target_user }}/.zshenv"
+        line: 'export PATH="{{ orbstack_bin }}:$PATH"'
+        create: yes
+        owner: "{{ target_user }}"
+        mode: '0644'
+      become: no
+      tags: [mini-orbstack]
+
     - name: Create OrbStack Docker config directory
       file:
         path: "/Users/{{ target_user }}/.orbstack/config"
