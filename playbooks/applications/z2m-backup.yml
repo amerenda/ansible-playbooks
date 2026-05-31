@@ -1,0 +1,71 @@
+---
+# Zigbee2MQTT database backup
+# Fetches database.db from mac-mini-m4 to murderbot at ~/backups/z2m/
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-backup.yml
+
+- name: Backup Z2M database
+  hosts: macmini_hosts
+  gather_facts: false
+  become: false
+
+  vars:
+    z2m_db_path: /Users/alex/komodo/stacks/automation/mac-mini-m4/zigbee2mqtt/z2m-data/database.db
+    backup_dir: "{{ lookup('env', 'HOME') }}/backups/z2m"
+    timestamp: "{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
+    backup_dest: "{{ backup_dir }}/database.db.{{ timestamp }}"
+    latest_link: "{{ backup_dir }}/database.db.latest"
+
+  tasks:
+    - name: Check database.db exists on mini
+      stat:
+        path: "{{ z2m_db_path }}"
+      register: db_stat
+
+    - name: Fail if database.db is missing
+      fail:
+        msg: "Z2M database not found at {{ z2m_db_path }} — is Z2M running?"
+      when: not db_stat.stat.exists
+
+    - name: Create backup dir on murderbot
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+
+    - name: Fetch database.db to murderbot
+      fetch:
+        src: "{{ z2m_db_path }}"
+        dest: "{{ backup_dest }}"
+        flat: true
+        validate_checksum: true
+
+    - name: Update latest symlink
+      file:
+        path: "{{ latest_link }}"
+        src: "{{ backup_dest }}"
+        state: link
+        force: true
+      delegate_to: localhost
+
+    - name: List recent backups
+      find:
+        paths: "{{ backup_dir }}"
+        patterns: "database.db.*"
+        excludes: "database.db.latest"
+      register: backups
+      delegate_to: localhost
+
+    - name: Remove backups older than 30 days
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ backups.files | selectattr('mtime', 'lt', (lookup('pipe', 'date +%s') | int) - 2592000) | list }}"
+      delegate_to: localhost
+      when: backups.files | length > 0
+
+    - name: Report
+      debug:
+        msg: "Backup saved to {{ backup_dest }} ({{ db_stat.stat.size }} bytes)"

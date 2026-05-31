@@ -1,0 +1,89 @@
+---
+# Zigbee2MQTT database restore
+# Copies database.db from murderbot backup to mac-mini-m4 and restarts Z2M.
+#
+# Usage:
+#   # Restore latest backup:
+#   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-restore.yml
+#
+#   # Restore specific backup:
+#   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-restore.yml \
+#     -e backup_file=~/backups/z2m/database.db.20260531-120000
+
+- name: Restore Z2M database
+  hosts: macmini_hosts
+  gather_facts: false
+  become: false
+
+  vars:
+    docker_bin: /Users/alex/.orbstack/bin/docker
+    z2m_db_path: /Users/alex/komodo/stacks/automation/mac-mini-m4/zigbee2mqtt/z2m-data/database.db
+    backup_dir: "{{ lookup('env', 'HOME') }}/backups/z2m"
+    backup_file: "{{ backup_dir }}/database.db.latest"
+
+  tasks:
+    - name: Resolve backup file path
+      stat:
+        path: "{{ backup_file }}"
+      register: backup_stat
+      delegate_to: localhost
+
+    - name: Fail if backup file is missing
+      fail:
+        msg: "Backup file not found: {{ backup_file }} — run z2m-backup.yml first or pass -e backup_file=<path>"
+      when: not backup_stat.stat.exists
+      delegate_to: localhost
+
+    - name: Check Z2M container is running
+      command: "{{ docker_bin }} inspect --format={{ '{{.State.Running}}' }} zigbee2mqtt"
+      register: z2m_running
+      failed_when: false
+
+    - name: Warn if Z2M not running
+      debug:
+        msg: "WARNING: Z2M container is not running — restoring database anyway, start Z2M manually if needed"
+      when: z2m_running.rc != 0 or z2m_running.stdout != 'true'
+
+    - name: Back up current database before overwriting
+      fetch:
+        src: "{{ z2m_db_path }}"
+        dest: "{{ backup_dir }}/database.db.pre-restore"
+        flat: true
+        validate_checksum: true
+      failed_when: false
+
+    - name: Copy database.db to mini
+      copy:
+        src: "{{ backup_file }}"
+        dest: "{{ z2m_db_path }}"
+        owner: alex
+        mode: "0644"
+        backup: false
+
+    - name: Restart Z2M container
+      command: "{{ docker_bin }} restart zigbee2mqtt"
+      when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
+
+    - name: Wait for Z2M to come back up
+      command: "{{ docker_bin }} inspect --format={{ '{{.State.Running}}' }} zigbee2mqtt"
+      register: z2m_status
+      until: z2m_status.stdout == 'true'
+      retries: 15
+      delay: 4
+      when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
+
+    - name: Check Z2M logs for startup errors
+      command: "{{ docker_bin }} logs --tail=20 zigbee2mqtt"
+      register: z2m_logs
+      when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
+      failed_when: false
+
+    - name: Show Z2M startup logs
+      debug:
+        var: z2m_logs.stdout_lines
+      when: z2m_logs is defined and z2m_logs.stdout_lines is defined
+
+    - name: Report
+      debug:
+        msg: "Restored {{ backup_file }} to {{ z2m_db_path }}. Z2M restarted."
+      when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
