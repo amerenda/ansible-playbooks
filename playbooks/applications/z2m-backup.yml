@@ -1,71 +1,106 @@
 ---
 # Zigbee2MQTT database backup
-# Fetches database.db from mac-mini-m4 to murderbot at ~/backups/z2m/
+# Installs the z2m-backup LaunchDaemon on mac-mini-m4 (every 4h) and runs an immediate backup.
+# Backups are stored on mac-mini-m4 at ~/backups/z2m/:
+#   database.db.YYYYMMDD-HHMMSS  — rolling 14-day backups
+#   database.db.latest            — symlink to most recent
+#   database.db.golden            — permanent snapshot (never auto-pruned)
 #
 # Usage:
 #   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-backup.yml
+#
+# Promote latest to golden:
+#   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-backup.yml \
+#     -e make_golden=true
 
-- name: Backup Z2M database
+- name: Install and run Z2M backup
   hosts: macmini_hosts
   gather_facts: false
   become: false
 
   vars:
-    z2m_db_path: /Users/alex/komodo/stacks/automation/mac-mini-m4/zigbee2mqtt/z2m-data/database.db
-    backup_dir: "{{ lookup('env', 'HOME') }}/backups/z2m"
-    timestamp: "{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
-    backup_dest: "{{ backup_dir }}/database.db.{{ timestamp }}"
-    latest_link: "{{ backup_dir }}/database.db.latest"
+    gitops_dir: /Users/alex/komodo-dean-gitops/mac-mini-m4
+    backup_script: "{{ gitops_dir }}/scripts/z2m-backup.sh"
+    plist_src: "{{ gitops_dir }}/launchd/com.local.z2m-backup.plist"
+    plist_dest: /Library/LaunchDaemons/com.local.z2m-backup.plist
+    backup_dir: /Users/alex/backups/z2m
+    make_golden: false
 
   tasks:
-    - name: Check database.db exists on mini
+    - name: Pull latest gitops on mini
+      command: git -C /Users/alex/komodo-dean-gitops pull --ff-only origin main
+      register: git_pull
+      changed_when: "'Already up to date' not in git_pull.stdout"
+      failed_when: false
+
+    - name: Make backup script executable
+      file:
+        path: "{{ backup_script }}"
+        mode: "0755"
+
+    - name: Check backup script exists
       stat:
-        path: "{{ z2m_db_path }}"
-      register: db_stat
+        path: "{{ backup_script }}"
+      register: script_stat
 
-    - name: Fail if database.db is missing
+    - name: Fail if backup script missing
       fail:
-        msg: "Z2M database not found at {{ z2m_db_path }} — is Z2M running?"
-      when: not db_stat.stat.exists
+        msg: "Backup script not found at {{ backup_script }} — git pull may have failed: {{ git_pull.stderr | default('') }}"
+      when: not script_stat.stat.exists
 
-    - name: Create backup dir on murderbot
-      file:
-        path: "{{ backup_dir }}"
-        state: directory
-        mode: "0750"
-      delegate_to: localhost
+    - name: Install z2m-backup LaunchDaemon
+      copy:
+        src: "{{ plist_src }}"
+        dest: "{{ plist_dest }}"
+        remote_src: true
+        mode: "0644"
+      become: true
+      register: plist_installed
 
-    - name: Fetch database.db to murderbot
-      fetch:
-        src: "{{ z2m_db_path }}"
-        dest: "{{ backup_dest }}"
-        flat: true
-        validate_checksum: true
+    - name: Reload z2m-backup LaunchDaemon
+      shell: |
+        launchctl bootout system {{ plist_dest }} 2>/dev/null || \
+          launchctl unload {{ plist_dest }} 2>/dev/null || true
+        launchctl bootstrap system {{ plist_dest }} 2>/dev/null || \
+          launchctl load {{ plist_dest }}
+      become: true
+      when: plist_installed.changed
 
-    - name: Update latest symlink
-      file:
-        path: "{{ latest_link }}"
-        src: "{{ backup_dest }}"
-        state: link
-        force: true
-      delegate_to: localhost
+    - name: Verify daemon is loaded
+      shell: launchctl list | grep com.local.z2m-backup || echo "NOT LOADED"
+      register: daemon_status
+      become: true
 
-    - name: List recent backups
-      find:
-        paths: "{{ backup_dir }}"
-        patterns: "database.db.*"
-        excludes: "database.db.latest"
-      register: backups
-      delegate_to: localhost
-
-    - name: Remove backups older than 30 days
-      file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ backups.files | selectattr('mtime', 'lt', (lookup('pipe', 'date +%s') | int) - 2592000) | list }}"
-      delegate_to: localhost
-      when: backups.files | length > 0
-
-    - name: Report
+    - name: Show daemon status
       debug:
-        msg: "Backup saved to {{ backup_dest }} ({{ db_stat.stat.size }} bytes)"
+        var: daemon_status.stdout_lines
+
+    - name: Run immediate backup
+      command: bash {{ backup_script }}
+      register: backup_result
+
+    - name: Show backup output
+      debug:
+        var: backup_result.stdout_lines
+
+    - name: Promote latest backup to golden
+      shell: |
+        latest_target=$(readlink {{ backup_dir }}/database.db.latest)
+        src="{{ backup_dir }}/$latest_target"
+        cp -f "$src" {{ backup_dir }}/database.db.golden
+        echo "Golden promoted from $src"
+      register: golden_result
+      when: make_golden | bool
+
+    - name: Show golden promotion result
+      debug:
+        var: golden_result.stdout_lines
+      when: make_golden | bool
+
+    - name: List all available backups
+      shell: ls -lht {{ backup_dir }}/
+      register: backups_list
+
+    - name: Show backups
+      debug:
+        var: backups_list.stdout_lines

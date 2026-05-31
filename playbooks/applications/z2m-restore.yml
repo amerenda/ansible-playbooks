@@ -1,14 +1,19 @@
 ---
 # Zigbee2MQTT database restore
-# Copies database.db from murderbot backup to mac-mini-m4 and restarts Z2M.
+# Restores database.db from a backup on mac-mini-m4 and restarts Z2M.
+# All backups live at ~/backups/z2m/ on mac-mini-m4.
 #
 # Usage:
-#   # Restore latest backup:
+#   # List available backups and restore latest (default):
 #   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-restore.yml
 #
-#   # Restore specific backup:
+#   # Restore a specific timestamp:
 #   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-restore.yml \
-#     -e backup_file=~/backups/z2m/database.db.20260531-120000
+#     -e backup_file=20260531-120000
+#
+#   # Restore golden (permanent snapshot):
+#   ansible-playbook -i inventory/inventory.ini playbooks/applications/z2m-restore.yml \
+#     -e backup_file=golden
 
 - name: Restore Z2M database
   hosts: macmini_hosts
@@ -18,21 +23,65 @@
   vars:
     docker_bin: /Users/alex/.orbstack/bin/docker
     z2m_db_path: /Users/alex/komodo/stacks/automation/mac-mini-m4/zigbee2mqtt/z2m-data/database.db
-    backup_dir: "{{ lookup('env', 'HOME') }}/backups/z2m"
-    backup_file: "{{ backup_dir }}/database.db.latest"
+    backup_dir: /Users/alex/backups/z2m
+    # backup_file: latest (default) | golden | YYYYMMDD-HHMMSS | database.db.YYYYMMDD-HHMMSS
+    backup_file: latest
 
   tasks:
-    - name: Resolve backup file path
-      stat:
-        path: "{{ backup_file }}"
-      register: backup_stat
-      delegate_to: localhost
+    - name: List available backups
+      shell: ls -lht {{ backup_dir }}/ 2>/dev/null || echo "(backup dir empty or missing)"
+      register: backups_list
+      failed_when: false
 
-    - name: Fail if backup file is missing
+    - name: Show available backups
+      debug:
+        var: backups_list.stdout_lines
+
+    - name: Resolve backup file path
+      shell: |
+        case "{{ backup_file }}" in
+          latest)
+            target=$(readlink {{ backup_dir }}/database.db.latest 2>/dev/null) || \
+              { echo "ERROR: no latest symlink found" >&2; exit 1; }
+            echo {{ backup_dir }}/$target
+            ;;
+          golden)
+            echo {{ backup_dir }}/database.db.golden
+            ;;
+          database.db.*)
+            echo {{ backup_dir }}/{{ backup_file }}
+            ;;
+          *)
+            echo {{ backup_dir }}/database.db.{{ backup_file }}
+            ;;
+        esac
+      register: resolved_path
+
+    - name: Check resolved backup file exists
+      stat:
+        path: "{{ resolved_path.stdout | trim }}"
+      register: backup_stat
+
+    - name: Fail if backup file not found
       fail:
-        msg: "Backup file not found: {{ backup_file }} — run z2m-backup.yml first or pass -e backup_file=<path>"
+        msg: "Backup file not found: {{ resolved_path.stdout | trim }}"
       when: not backup_stat.stat.exists
-      delegate_to: localhost
+
+    - name: Confirm which backup will be restored
+      debug:
+        msg: "Restoring: {{ resolved_path.stdout | trim }} ({{ backup_stat.stat.size }} bytes)"
+
+    - name: Save pre-restore snapshot
+      command: >
+        cp {{ z2m_db_path }} {{ backup_dir }}/database.db.pre-restore
+      failed_when: false
+
+    - name: Copy backup to Z2M data dir
+      copy:
+        src: "{{ resolved_path.stdout | trim }}"
+        dest: "{{ z2m_db_path }}"
+        remote_src: true
+        mode: "0644"
 
     - name: Check Z2M container is running
       command: "{{ docker_bin }} inspect --format={{ '{{.State.Running}}' }} zigbee2mqtt"
@@ -41,24 +90,8 @@
 
     - name: Warn if Z2M not running
       debug:
-        msg: "WARNING: Z2M container is not running — restoring database anyway, start Z2M manually if needed"
+        msg: "WARNING: Z2M container not running — database restored but container not restarted"
       when: z2m_running.rc != 0 or z2m_running.stdout != 'true'
-
-    - name: Back up current database before overwriting
-      fetch:
-        src: "{{ z2m_db_path }}"
-        dest: "{{ backup_dir }}/database.db.pre-restore"
-        flat: true
-        validate_checksum: true
-      failed_when: false
-
-    - name: Copy database.db to mini
-      copy:
-        src: "{{ backup_file }}"
-        dest: "{{ z2m_db_path }}"
-        owner: alex
-        mode: "0644"
-        backup: false
 
     - name: Restart Z2M container
       command: "{{ docker_bin }} restart zigbee2mqtt"
@@ -72,8 +105,8 @@
       delay: 4
       when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
 
-    - name: Check Z2M logs for startup errors
-      command: "{{ docker_bin }} logs --tail=20 zigbee2mqtt"
+    - name: Check Z2M startup logs
+      command: "{{ docker_bin }} logs --tail=8 zigbee2mqtt"
       register: z2m_logs
       when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
       failed_when: false
@@ -85,5 +118,5 @@
 
     - name: Report
       debug:
-        msg: "Restored {{ backup_file }} to {{ z2m_db_path }}. Z2M restarted."
+        msg: "Restored {{ resolved_path.stdout | trim }} → {{ z2m_db_path }}. Z2M restarted."
       when: z2m_running.rc == 0 and z2m_running.stdout == 'true'
