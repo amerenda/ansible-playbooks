@@ -23,5 +23,6 @@ services:
       - /proc:/proc
       - /etc/komodo:/etc/komodo
       - /etc/komodo/.bws-secret:/run/secrets/bws-access-token:ro
+      - /home/alex/komodo-dean-gitops:/home/alex/komodo-dean-gitops:ro
       - /mnt/storage/media/config:/mnt/storage/media/config
       - /mnt/storage:/mnt/storage
