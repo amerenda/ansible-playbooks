@@ -371,6 +371,45 @@
       ansible.builtin.include_tasks: ../../tasks/archlinux-komodo-render-compose-env.yml
       tags: [arch-komodo, arch-periphery]
 
+    # ─── Docker daemon DNS ────────────────────────────────────────────────
+    # Explicitly pin DNS servers in Docker daemon so containers always get
+    # correct resolvers regardless of what the host /etc/resolv.conf says.
+    # This prevents the Periphery container from inheriting 127.0.0.53
+    # (systemd-resolved stub) if Tailscale or another tool changes resolv.conf
+    # after Docker starts, and ensures it survives fresh installs and reboots.
+    - name: Ensure /etc/docker directory exists
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [arch-komodo, arch-periphery, arch-docker-dns]
+
+    - name: Read existing Docker daemon.json (if present)
+      ansible.builtin.slurp:
+        src: /etc/docker/daemon.json
+      register: existing_daemon_json
+      failed_when: false
+      tags: [arch-komodo, arch-periphery, arch-docker-dns]
+
+    - name: Merge DNS servers into Docker daemon.json
+      ansible.builtin.copy:
+        content: "{{ (existing_daemon_json.content | default('e30=') | b64decode | from_json) | combine({'dns': ['10.100.20.240', '1.1.1.1']}) | to_nice_json }}\n"
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+      register: docker_daemon_json_updated
+      tags: [arch-komodo, arch-periphery, arch-docker-dns]
+
+    - name: Restart Docker to apply daemon.json DNS change
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when: docker_daemon_json_updated.changed
+      tags: [arch-komodo, arch-periphery, arch-docker-dns]
+
     # ─── Deploy Periphery ──────────────────────────────────────────────────
     - name: Build and (re)start Komodo Periphery (force-recreate for env/passkey fixes)
       ansible.builtin.shell: docker compose -f compose.yaml --env-file compose.env up -d --build --force-recreate
