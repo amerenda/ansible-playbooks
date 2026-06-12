@@ -970,6 +970,27 @@
       changed_when: false
       tags: [mini-dns, macmini]
 
+    - name: Install dns-keepalive LaunchDaemon
+      copy:
+        src: "{{ macmini_compose_dir }}/launchd/com.local.dns-keepalive.plist"
+        dest: /Library/LaunchDaemons/com.local.dns-keepalive.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-dns, macmini]
+
+    - name: Restart dns-keepalive LaunchDaemon
+      shell: |
+        launchctl bootout system /Library/LaunchDaemons/com.local.dns-keepalive.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.dns-keepalive.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.dns-keepalive.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.dns-keepalive.plist
+      become: yes
+      changed_when: false
+      tags: [mini-dns, macmini]
+
     # ─── Summary ───────────────────────────────────────────────────────────
     - name: Display setup summary
       debug:
