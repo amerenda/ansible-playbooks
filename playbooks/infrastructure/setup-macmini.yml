@@ -734,6 +734,7 @@
         body:
           name: komodo-dean-gitops
           config:
+            managed: true
             repo: amerenda/komodo-dean-gitops
             branch: main
             resource_path:
@@ -741,10 +742,34 @@
             git_account: amerenda
             git_provider: github.com
             git_https: true
+            webhook_enabled: true
         headers:
           Authorization: "{{ komodo_jwt }}"
         status_code: 200
       when: resource_syncs.json | length == 0
+      tags: [mini-komodo]
+
+    - name: Ensure ResourceSync managed=true on existing sync
+      uri:
+        url: "http://localhost:9120/write/UpdateResourceSync"
+        method: POST
+        body_format: json
+        body:
+          id: "{{ resource_syncs.json[0].id }}"
+          config:
+            managed: true
+            repo: amerenda/komodo-dean-gitops
+            branch: main
+            resource_path:
+              - "resource-sync/stacks.toml"
+            git_account: amerenda
+            git_provider: github.com
+            git_https: true
+            webhook_enabled: true
+        headers:
+          Authorization: "{{ komodo_jwt }}"
+        status_code: 200
+      when: resource_syncs.json | length > 0
       tags: [mini-komodo]
 
     - name: Trigger initial resource sync
