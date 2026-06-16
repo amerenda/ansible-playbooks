@@ -755,7 +755,7 @@
         method: POST
         body_format: json
         body:
-          id: "{{ resource_syncs.json[0]._id['$oid'] }}"
+          id: "{{ resource_syncs.json[0].id }}"
           config:
             managed: true
             repo: amerenda/komodo-dean-gitops
