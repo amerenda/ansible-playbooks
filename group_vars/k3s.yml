@@ -6,9 +6,12 @@
 # All UUIDs live here — fetch-secrets.yml iterates over this dict.
 # To get values: bws secret get <UUID> --access-token <TOKEN>
 bws_secrets:
-  k3s_token: "ab7a85fd-3e47-4493-8ed1-b373011bdbb0"        # k3s-dean-etcd-token
-  argocd_repo_pat: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"  # github-pat-k3s-dean-gitops (ArgoCD + CI)
-  docker_hub_token: "c5ad7fae-2f58-4a8b-9651-b413001cad7f" # docker-hub-k3s-runner-api-key
+  k3s_token: "ab7a85fd-3e47-4493-8ed1-b373011bdbb0"                    # k3s-dean-etcd-token
+  argocd_repo_pat: "42ea6b6b-3b1e-43d9-8743-b41301665cc9"              # github-pat-k3s-dean-gitops (ArgoCD + CI)
+  docker_hub_token: "c5ad7fae-2f58-4a8b-9651-b413001cad7f"             # docker-hub-k3s-runner-api-key
+  github_app_ci_bot_id: "6e90afbe-53c6-4402-96b2-b41900ded51c"         # github-app-ci-bot-id
+  github_app_ci_bot_installation_id: "13174e09-ce1d-4f5d-b55b-b41900e378bf"  # github-app-ci-bot-installation-id
+  github_app_ci_bot_private_key: "5ab6e2ca-b846-4546-b1e6-b41900e11f1c"      # github-app-ci-bot-private-key
 
 # ESO (External Secrets Operator) config — not secrets, just identifiers.
 # The ESO access token is the bws_access_token passed to ansible at runtime.

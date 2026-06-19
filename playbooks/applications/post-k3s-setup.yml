@@ -25,6 +25,9 @@
     is_first_controller: true
     # BWS-fetched secrets (set by fetch-secrets.yml when run via all.yml)
     argocd_repo_pat: "{{ hostvars['localhost']['fetched_secrets']['argocd_repo_pat'] | default('') }}"
+    github_app_ci_bot_id: "{{ hostvars['localhost']['fetched_secrets']['github_app_ci_bot_id'] | default('') }}"
+    github_app_ci_bot_installation_id: "{{ hostvars['localhost']['fetched_secrets']['github_app_ci_bot_installation_id'] | default('') }}"
+    github_app_ci_bot_private_key: "{{ hostvars['localhost']['fetched_secrets']['github_app_ci_bot_private_key'] | default('') }}"
 
   pre_tasks:
     - name: Check if kubeconfig exists
@@ -162,6 +165,39 @@
           Run via all.yml with -e bws_access_token=<TOKEN>, or apply manually:
             kubectl apply -f bootstrap/argocd-repo-secret.yaml
       when: argocd_repo_pat | length == 0
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Create ArgoCD repo credential template with GitHub App auth
+      kubernetes.core.k8s:
+        kubeconfig: "/home/{{ local_user }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cred-k3s-dean-gitops
+            namespace: default
+            labels:
+              argocd.argoproj.io/secret-type: repo-creds
+          type: Opaque
+          stringData:
+            type: git
+            url: https://github.com/amerenda
+            githubAppID: "{{ github_app_ci_bot_id }}"
+            githubAppInstallationID: "{{ github_app_ci_bot_installation_id }}"
+            githubAppPrivateKey: "{{ github_app_ci_bot_private_key }}"
+      when:
+        - is_first_controller
+        - github_app_ci_bot_id | length > 0
+      no_log: true
+      tags: [argocd, secrets, bootstrap]
+
+    - name: Warn if GitHub App credentials not available from BWS
+      ansible.builtin.debug:
+        msg: |
+          ArgoCD repo credential template NOT created — github_app_ci_bot_* secrets not fetched from BWS.
+          Run via all.yml with -e bws_access_token=<TOKEN>.
+      when: github_app_ci_bot_id | length == 0
       tags: [argocd, secrets, bootstrap]
 
     - name: Create Bitwarden credentials secret for ESO
