@@ -1,7 +1,7 @@
 ---
 # Bootstrap the Arch Linux host as a Komodo Periphery agent for
 # amerenda/komodo-dean-gitops. After this play, Komodo Core (mac-mini-m4)
-# can deploy stacks under `murderbot/` from this host (e.g. media-server).
+# can deploy stacks under `archlinux/` from this host (e.g. llm-archlinux).
 #
 # Periphery passkey: `tasks/archlinux-komodo-render-compose-env.yml` is
 # included on every run. It writes PERIPHERY_PASSKEYS from BWS
@@ -29,8 +29,7 @@
   vars:
     target_user: "{{ ansible_user }}"
     compose_dir: "/home/{{ target_user }}/komodo-dean-gitops"
-    murderbot_repo_dir: "{{ compose_dir }}/murderbot"
-    komodo_dir: "{{ murderbot_repo_dir }}/komodo"
+    komodo_dir: "{{ compose_dir }}/archlinux/komodo"
     komodo_etc: "/etc/komodo"
     bws_token_file: "{{ komodo_etc }}/.bws-secret"
     bws_token_dir: "{{ komodo_etc }}/secrets"
@@ -317,10 +316,9 @@
       when: compose_repo_check.stat.exists
       tags: [arch-komodo, arch-periphery, arch-media-dirs]
 
-    # If origin/main does not yet contain murderbot/komodo/, the path is missing
-    # after clone. copy: will not create parent dirs — create them explicitly.
-    # become: false so new dirs under ~ are owned by the login user (not root).
-    - name: Ensure murderbot/komodo directory exists
+    # archlinux/komodo/ is checked into the gitops repo; ensure the dir exists
+    # (only absent if the clone step above failed or the repo is very stale).
+    - name: Ensure archlinux/komodo directory exists
       ansible.builtin.file:
         path: "{{ komodo_dir }}"
         state: directory
@@ -328,46 +326,12 @@
       become: false
       tags: [arch-komodo, arch-periphery, arch-media-dirs]
 
-    # If compose.env.example is still missing (stale main), seed from the copy
-    # bundled with this playbook only when absent (force: no).
-    - name: Ensure murderbot/komodo/compose.env.example exists
-      ansible.builtin.copy:
-        src: archlinux-komodo-compose.env.example
-        dest: "{{ komodo_dir }}/compose.env.example"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0644"
-        force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
-
-    # docker compose requires compose.yaml (or docker-compose.yml) in chdir;
-    # seed from playbook when repo main does not yet include murderbot/komodo/.
-    - name: Ensure murderbot/komodo/compose.yaml exists
-      ansible.builtin.copy:
-        src: archlinux-komodo-compose.yaml
-        dest: "{{ komodo_dir }}/compose.yaml"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0644"
-        force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
-
-    - name: Ensure murderbot/komodo/Dockerfile.periphery exists
-      ansible.builtin.copy:
-        src: archlinux-komodo-Dockerfile.periphery
-        dest: "{{ komodo_dir }}/Dockerfile.periphery"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0644"
-        force: false
-      tags: [arch-komodo, arch-periphery, arch-media-dirs]
-
     # ─── Render Periphery compose.env from BWS ─────────────────────────────
     # Do not use sed for passkey injection: Komodo passkeys often contain
     # characters that break sed. Python str.replace is safe. Passkey is
     # stripped of leading/trailing whitespace after BWS decode (avoids Core vs
     # Periphery mismatch when the secret has a trailing newline).
-    - name: Render murderbot/komodo/compose.env from compose.env.example
+    - name: Render archlinux/komodo/compose.env from compose.env.example
       ansible.builtin.include_tasks: ../../tasks/archlinux-komodo-render-compose-env.yml
       tags: [arch-komodo, arch-periphery]
 
@@ -689,4 +653,4 @@
 
           Next steps (if server still missing): in Komodo UI or resource-sync/stacks.toml,
             1. Server in stacks.toml at https://{{ archlinux_ip }}:8120 (if still used)
-            2. murderbot/media-server/ in git; ResourceSync registers stacks
+            2. archlinux/llm/ in git; ResourceSync registers stacks (git-based, no files_on_host)
