@@ -67,6 +67,18 @@
         media_data_root_effective: "{{ lookup('vars', 'media_data_root', default='/mnt/storage') }}"
       tags: [arch-komodo, arch-media-dirs]
 
+    # ─── Hostname ──────────────────────────────────────────────────────────
+    # Arch Linux does not create /etc/hostname automatically; hostnamectl writes it.
+    # Komodo Periphery's PERIPHERY_INCLUDE_DISK_MOUNTS previously referenced
+    # /etc/hostname (to get root-fs stats via `df`), which failed when the file
+    # was absent and caused the server to show NotOk. We removed that entry from
+    # compose.env.example, but setting the static hostname is correct hygiene anyway.
+    - name: Set static hostname
+      ansible.builtin.hostname:
+        name: "{{ archlinux_hostname | default('archlinux') }}"
+        use: systemd
+      tags: [arch-komodo, arch-periphery, arch-hostname]
+
     # ─── System packages ───────────────────────────────────────────────────
     - name: Install workstation packages from official repos
       pacman:
