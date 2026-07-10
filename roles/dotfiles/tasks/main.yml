@@ -99,6 +99,26 @@
   become: false
   tags: [dotfiles]
 
+- name: Check if ~/.logs is a real directory (not a symlink)
+  ansible.builtin.stat:
+    path: "{{ cachyos_user_home }}/.logs"
+  register: logs_stat
+  become: false
+  tags: [dotfiles]
+
+- name: Move ~/.logs contents into dotfiles/logs/ and remove the dir so dotbot can symlink it
+  ansible.builtin.shell: |
+    shopt -s dotglob
+    if ls "{{ cachyos_user_home }}/.logs"/* 2>/dev/null | head -1; then
+      cp -a "{{ cachyos_user_home }}/.logs"/. "{{ cachyos_dotfiles_dest }}/logs/"
+    fi
+    rm -rf "{{ cachyos_user_home }}/.logs"
+  args:
+    executable: /bin/bash
+  become: false
+  when: logs_stat.stat.exists and not logs_stat.stat.islnk
+  tags: [dotfiles]
+
 - name: Ensure spaceship.zsh placeholder exists in dotfiles (dotbot symlinks ~/.config/spaceship.zsh here)
   ansible.builtin.file:
     path: "{{ cachyos_dotfiles_dest }}/spaceship.zsh"
