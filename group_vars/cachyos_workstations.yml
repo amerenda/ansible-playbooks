@@ -132,7 +132,6 @@ cachyos_aur_packages:
   - cursor-bin
   - dropbox
   - nordpass-bin
-  - nordvpn-bin
   - amdgpu_top
   - sunshine
   - proton-ge-custom-bin
