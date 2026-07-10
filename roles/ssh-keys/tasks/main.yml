@@ -47,7 +47,7 @@
 
 - name: Write alex main private key
   ansible.builtin.copy:
-    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_private] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_private] }}"
     dest: "{{ cachyos_user_home }}/.ssh/alex_id_ed25519"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
@@ -57,7 +57,7 @@
 
 - name: Write alex main public key
   ansible.builtin.copy:
-    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_public] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_public] }}"
     dest: "{{ cachyos_user_home }}/.ssh/alex_id_ed25519.pub"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
@@ -67,7 +67,7 @@
 
 - name: Write GitHub private key
   ansible.builtin.copy:
-    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_github_private] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_github_private] }}"
     dest: "{{ cachyos_user_home }}/.ssh/github"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
@@ -77,7 +77,7 @@
 
 - name: Write GitHub public key
   ansible.builtin.copy:
-    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_github_public] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_github_public] }}"
     dest: "{{ cachyos_user_home }}/.ssh/github.pub"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
@@ -87,7 +87,7 @@
 
 - name: Write authorized_keys from alex public key
   ansible.builtin.copy:
-    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_public] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_public] }}"
     dest: "{{ cachyos_user_home }}/.ssh/authorized_keys"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
