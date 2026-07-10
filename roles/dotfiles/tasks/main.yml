@@ -36,7 +36,7 @@
 
 - name: Pull latest dotfiles
   ansible.builtin.shell: |
-    git -C {{ cachyos_dotfiles_dest }} pull --ff-only
+    git -C {{ cachyos_dotfiles_dest }} pull --rebase --autostash
   become: false
   changed_when: false
   when: dotfiles_git_stat.stat.exists
