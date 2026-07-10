@@ -60,10 +60,25 @@
     gid: "{{ arc_runner_docker_socket_gid_effective }}"
   register: arc_docker_group_gid_task
 
-- name: Restart Docker after docker group GID change
+- name: Stop docker.socket to allow socket recreation with new GID
   ansible.builtin.systemd:
-    name: docker
-    state: restarted
+    name: docker.socket
+    state: stopped
+  when: arc_docker_group_gid_task.changed | default(false)
+
+- name: Remove stale docker.sock (owned by old GID)
+  ansible.builtin.file:
+    path: /var/run/docker.sock
+    state: absent
+  when: arc_docker_group_gid_task.changed | default(false)
+
+- name: Restart Docker and docker.socket with new GID
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  loop:
+    - docker.socket
+    - docker
   when: arc_docker_group_gid_task.changed | default(false)
 
 - name: Wait for docker.sock to match docker group GID
