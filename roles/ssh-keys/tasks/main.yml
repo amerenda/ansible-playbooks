@@ -47,7 +47,7 @@
 
 - name: Write alex main private key
   ansible.builtin.copy:
-    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_private] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_private] | trim }}\n"
     dest: "{{ cachyos_user_home }}/.ssh/alex_id_ed25519"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
@@ -67,7 +67,7 @@
 
 - name: Write GitHub private key
   ansible.builtin.copy:
-    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_github_private] }}"
+    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_github_private] | trim }}\n"
     dest: "{{ cachyos_user_home }}/.ssh/github"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
