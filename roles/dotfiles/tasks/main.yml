@@ -83,11 +83,9 @@
   become: false
   tags: [dotfiles]
 
-- name: Install dotbot via pip
-  ansible.builtin.pip:
-    name: dotbot
-    state: present
-    extra_args: --user
+- name: Install dotbot via pipx (Arch uses PEP 668, pip --user not allowed)
+  ansible.builtin.shell: |
+    pipx install dotbot
   become: false
   when: dotbot_check.rc != 0
   tags: [dotfiles]
@@ -97,7 +95,7 @@
     set -euo pipefail
     cd {{ cachyos_dotfiles_dest }}
     git submodule update --init --recursive
-    python3 -m dotbot -c install.conf.yaml
+    ~/.local/bin/dotbot -c install.conf.yaml
   become: false
   args:
     executable: /bin/bash
