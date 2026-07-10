@@ -40,6 +40,8 @@
   become: false
   changed_when: false
   when: dotfiles_git_stat.stat.exists
+  environment:
+    GIT_SSH_COMMAND: "ssh -i {{ cachyos_user_home }}/.ssh/github -o StrictHostKeyChecking=no"
   tags: [dotfiles]
 
 # Copy SSH keys into dotfiles/ssh/ BEFORE dotbot runs (dotbot will symlink ~/.ssh → dotfiles/ssh/)
