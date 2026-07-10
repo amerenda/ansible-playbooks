@@ -89,6 +89,28 @@
   when: dotbot_check.rc != 0
   tags: [dotfiles]
 
+- name: Ensure logs dir exists in dotfiles (dotbot symlinks ~/.logs here)
+  ansible.builtin.file:
+    path: "{{ cachyos_dotfiles_dest }}/logs"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [dotfiles]
+
+- name: Ensure spaceship.zsh placeholder exists in dotfiles (dotbot symlinks ~/.config/spaceship.zsh here)
+  ansible.builtin.file:
+    path: "{{ cachyos_dotfiles_dest }}/spaceship.zsh"
+    state: touch
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+    modification_time: preserve
+    access_time: preserve
+  become: false
+  tags: [dotfiles]
+
 - name: Run dotbot
   ansible.builtin.shell: |
     set -euo pipefail
