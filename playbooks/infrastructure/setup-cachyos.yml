@@ -9,7 +9,10 @@
 #   ansible-playbook -i inventory/inventory.ini \
 #     playbooks/infrastructure/setup-cachyos.yml \
 #     --extra-vars "bws_access_token=<TOKEN>" \
-#     --limit archlinux
+#     --limit "archlinux,localhost"
+#
+# NOTE: --limit must include 'localhost' because fetch-secrets.yml runs on
+# the control node to populate k3s_token (used by the k3s-agent role).
 #
 # Tags (run subsections independently):
 #   common, kde, amd-gpu, gaming, docker, desktop-apps,
