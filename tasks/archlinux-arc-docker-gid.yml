@@ -3,6 +3,9 @@
 # Run after Docker is installed so group `docker` exists. Requires become.
 #
 # Variable: arc_runner_docker_socket_gid (optional; defaults to 989 for ARC compatibility).
+#
+# If another group (e.g. `render`) occupies the target GID, it is moved to the first
+# free GID above 1000 before docker is reassigned.
 
 - name: Resolve target docker socket GID for ARC
   ansible.builtin.set_fact:
@@ -19,18 +22,37 @@
   changed_when: false
   failed_when: arc_getent_docker.rc != 0
 
-- name: Fail if target GID is reserved by another group
+- name: Check if target GID is occupied by a non-docker group
   ansible.builtin.shell: |
     set -euo pipefail
     line=$(getent group "{{ arc_runner_docker_socket_gid_effective }}" || true)
-    if [ -z "$line" ]; then exit 0; fi
+    if [ -z "$line" ]; then echo "free"; exit 0; fi
     name=$(echo "$line" | cut -d: -f1)
-    if [ "$name" = "docker" ]; then exit 0; fi
-    echo "GID {{ arc_runner_docker_socket_gid_effective }} is already used by group: ${name}" >&2
-    exit 1
+    if [ "$name" = "docker" ]; then echo "docker"; exit 0; fi
+    echo "$name"
   args:
     executable: /bin/bash
+  register: arc_gid_occupant
   changed_when: false
+
+- name: Find a free GID above 1000 to reassign the occupying group
+  ansible.builtin.shell: |
+    set -euo pipefail
+    taken=$(getent group | awk -F: '{print $3}' | sort -n)
+    gid=1000
+    while echo "$taken" | grep -qx "$gid"; do gid=$((gid+1)); done
+    echo "$gid"
+  args:
+    executable: /bin/bash
+  register: arc_free_gid
+  changed_when: false
+  when: arc_gid_occupant.stdout not in ('free', 'docker')
+
+- name: Reassign occupying group to a free GID to make room for docker
+  ansible.builtin.group:
+    name: "{{ arc_gid_occupant.stdout }}"
+    gid: "{{ arc_free_gid.stdout | int }}"
+  when: arc_gid_occupant.stdout not in ('free', 'docker')
 
 - name: Set docker group GID to match ARC runner supplementalGroups
   ansible.builtin.group:
