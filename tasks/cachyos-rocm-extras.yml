@@ -1,0 +1,80 @@
+---
+# ROCm for host-side monitoring/debugging (rocminfo, rocm-smi). cachyos_rocm_extra_packages
+# is empty by default (see group_vars/cachyos_workstations.yml for why: rocm-hip-sdk alone is
+# a ~22GB dev toolchain that doesn't fit on this host and nothing needs it — ollama's
+# container bundles its own ROCm userspace). Kept as a hook for a future real need.
+# Also puts /opt/rocm/bin on PATH (not on PATH by default on Arch; rocminfo/rocm-smi are
+# otherwise unusable interactively).
+#
+# Required vars (from group_vars/cachyos_workstations.yml): cachyos_rocm_base_packages,
+# cachyos_rocm_extra_packages, cachyos_rocm_profile_path.
+# Expects has_amd_gpu to already be set (tasks/gpu-runtime-setup.yml sets this fact).
+
+- name: Install base ROCm packages (rocminfo, rocm-smi, hip runtime)
+  community.general.pacman:
+    name: "{{ cachyos_rocm_base_packages }}"
+    state: present
+    update_cache: yes
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+
+- name: Install ROCm extras
+  community.general.pacman:
+    name: "{{ cachyos_rocm_extra_packages }}"
+    state: present
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+    - cachyos_rocm_extra_packages | length > 0
+
+- name: Put /opt/rocm/bin on PATH for all users
+  ansible.builtin.copy:
+    dest: "{{ cachyos_rocm_profile_path }}"
+    content: |
+      # Managed by ansible-playbooks (tasks/cachyos-rocm-extras.yml)
+      export PATH="/opt/rocm/bin:${PATH}"
+    mode: "0644"
+    owner: root
+    group: root
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+
+- name: Verify ROCm sees the GPU (rocminfo)
+  ansible.builtin.command: /opt/rocm/bin/rocminfo
+  register: cachyos_rocminfo
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+
+- name: Extract GPU gfx target from rocminfo
+  ansible.builtin.set_fact:
+    cachyos_rocm_gfx: "{{ cachyos_rocminfo.stdout | regex_findall('gfx[0-9a-fA-F]+') | first | default('') }}"
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+    - cachyos_rocminfo.rc | default(1) == 0
+
+- name: Warn if ROCm does not report a GPU agent (may need HSA_OVERRIDE_GFX_VERSION)
+  ansible.builtin.debug:
+    msg: |
+      rocminfo did not report a GPU gfx target (only CPU agent found, or command failed).
+      Host ROCm tools (rocm-smi, rocminfo) may need HSA_OVERRIDE_GFX_VERSION set for this
+      card. This does NOT affect the ollama:rocm container — it bundles its own ROCm
+      userspace and is configured independently via HSA_OVERRIDE_GFX_VERSION in
+      komodo-dean-gitops/archlinux/llm/ollama.env.
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+    - (cachyos_rocm_gfx | default('')) | length == 0
+
+- name: Show detected ROCm GPU target
+  ansible.builtin.debug:
+    msg: "ROCm detected GPU target: {{ cachyos_rocm_gfx }}"
+  when:
+    - ansible_distribution == 'Archlinux'
+    - has_amd_gpu | default(false)
+    - (cachyos_rocm_gfx | default('')) | length > 0

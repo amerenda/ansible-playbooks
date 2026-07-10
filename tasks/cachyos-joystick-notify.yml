@@ -1,0 +1,79 @@
+---
+# joystick-notify: gamepad-driven couch-mode switcher (KDE Plasma Wayland). Repo's install.sh
+# is already idempotent and must run as the normal user (refuses EUID 0; calls sudo itself).
+#
+# Required vars: cachyos_joystick_notify_repo, cachyos_joystick_notify_repo_dir
+# (group_vars/cachyos.yml)
+
+- name: Install joystick-notify dependencies (gamescope, libcec, python-pyqt6)
+  community.general.pacman:
+    name:
+      - gamescope
+      - libcec
+      - python-pyqt6
+    state: present
+    update_cache: yes
+  when: ansible_distribution == 'Archlinux'
+
+- name: Check if joystick-notify repo exists
+  ansible.builtin.stat:
+    path: "{{ cachyos_joystick_notify_repo_dir }}/.git"
+  register: cachyos_jsn_repo_check
+  become: false
+
+- name: Clone joystick-notify repo
+  ansible.builtin.git:
+    repo: "{{ cachyos_joystick_notify_repo }}"
+    dest: "{{ cachyos_joystick_notify_repo_dir }}"
+    version: main
+  become: false
+  when: not cachyos_jsn_repo_check.stat.exists
+
+- name: Check joystick-notify working tree is clean before pulling
+  ansible.builtin.command: "git -C {{ cachyos_joystick_notify_repo_dir }} status --porcelain"
+  become: false
+  register: cachyos_jsn_repo_status
+  changed_when: false
+  when: cachyos_jsn_repo_check.stat.exists
+
+- name: Warn and skip pull if joystick-notify has local uncommitted changes
+  ansible.builtin.debug:
+    msg: |
+      {{ cachyos_joystick_notify_repo_dir }} has uncommitted local changes — skipping
+      `git pull` so nothing gets clobbered. Commit or stash them yourself, then re-run.
+  when:
+    - cachyos_jsn_repo_check.stat.exists
+    - (cachyos_jsn_repo_status.stdout | default('')) | length > 0
+
+- name: Pull latest joystick-notify repo
+  ansible.builtin.shell: "git -C {{ cachyos_joystick_notify_repo_dir }} pull --ff-only"
+  become: false
+  changed_when: false
+  when:
+    - cachyos_jsn_repo_check.stat.exists
+    - (cachyos_jsn_repo_status.stdout | default('')) | length == 0
+
+- name: Run joystick-notify installer (idempotent — install -D + systemd --user enable --now)
+  ansible.builtin.command: "{{ cachyos_joystick_notify_repo_dir }}/install.sh"
+  args:
+    chdir: "{{ cachyos_joystick_notify_repo_dir }}"
+  become: false
+  register: cachyos_jsn_install
+  # install.sh always prints "Done." at the end regardless of whether anything changed
+  # (install -D + systemd enable --now are themselves idempotent no-ops when already
+  # correct) — there's no reliable signal in its output to detect real changes.
+  changed_when: false
+
+- name: Verify joystick-notify.service (user) is active
+  ansible.builtin.command: "systemctl --user is-active joystick-notify.service"
+  become: false
+  register: cachyos_jsn_active
+  changed_when: false
+  failed_when: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+
+- name: Show joystick-notify service status
+  ansible.builtin.debug:
+    msg: "joystick-notify.service: {{ cachyos_jsn_active.stdout | default('unknown') }}"

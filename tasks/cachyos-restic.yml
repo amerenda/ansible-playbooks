@@ -1,0 +1,191 @@
+---
+# System-level restic backup to GCS (gs:amerenda-backups:/<hostname>), daily at 2am via
+# systemd timer. Matches what's already deployed on archlinux at
+# /usr/local/sbin/backup.sh + /etc/systemd/system/backup.{service,timer}.
+# GCP SA key + repo password come from BWS (blank UUIDs today — see group_vars/k3s.yml).
+#
+# Required vars: cachyos_restic_gcs_repo, cachyos_restic_keys_dir,
+# cachyos_restic_sa_key_secret, cachyos_restic_password_secret (group_vars/cachyos.yml)
+
+- name: Resolve fetched restic secrets
+  ansible.builtin.set_fact:
+    cachyos_restic_sa_key_value: "{{ hostvars['localhost']['fetched_secrets'][cachyos_restic_sa_key_secret] | default('') }}"
+    cachyos_restic_password_value: "{{ hostvars['localhost']['fetched_secrets'][cachyos_restic_password_secret] | default('') }}"
+  no_log: true
+
+- name: Warn and skip restic setup if secrets not yet in BWS
+  ansible.builtin.debug:
+    msg: |
+      Skipping restic backup setup: {{ cachyos_restic_sa_key_secret }} and/or
+      {{ cachyos_restic_password_secret }} not yet in BWS (blank UUID in group_vars/k3s.yml).
+      Add them in the BWS 'servers' project and re-run.
+  when: (cachyos_restic_sa_key_value | length == 0) or (cachyos_restic_password_value | length == 0)
+
+- name: Configure restic backup
+  when:
+    - (cachyos_restic_sa_key_value | length) > 0
+    - (cachyos_restic_password_value | length) > 0
+  block:
+    - name: Ensure /etc/backup-keys exists
+      ansible.builtin.file:
+        path: "{{ cachyos_restic_keys_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write GCP service account key
+      ansible.builtin.copy:
+        content: "{{ cachyos_restic_sa_key_value }}"
+        dest: "{{ cachyos_restic_keys_dir }}/backup-amerenda.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Write restic repo password
+      ansible.builtin.copy:
+        content: "{{ cachyos_restic_password_value }}"
+        dest: "{{ cachyos_restic_keys_dir }}/restic_password.txt"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Ensure /var/lib/restic exists
+      ansible.builtin.file:
+        path: /var/lib/restic
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write restic include list (whole root fs)
+      ansible.builtin.copy:
+        dest: /var/lib/restic/include.txt
+        content: "/\n"
+        mode: "0644"
+
+    - name: Write restic exclude list
+      ansible.builtin.copy:
+        dest: /var/lib/restic/exclude.txt
+        content: |
+          # System directories to exclude
+          /dev
+          /proc
+          /sys
+          /tmp
+          /run
+          /mnt
+          /media
+          /lost+found
+          {{ cachyos_restic_keys_dir }}
+
+          # User specified exclusions
+          /var/cache/pacman/pkg
+
+          # Other common cache/temp locations
+          /var/tmp
+          /var/run
+          .cache
+          .cargo
+          .terraform
+          .git
+        mode: "0644"
+
+    - name: Install backup.sh
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/backup.sh
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/usr/bin/env bash
+
+          # Ensure script is run as root for system backup
+          if [[ $EUID -ne 0 ]]; then
+             echo "This script must be run as root (use sudo)"
+             exit 1
+          fi
+
+          export RESTIC_DIR="/var/lib/restic"
+          export INCLUDE_FILE="${RESTIC_DIR}/include.txt"
+          export EXCLUDE_FILE="${RESTIC_DIR}/exclude.txt"
+
+          export GOOGLE_APPLICATION_CREDENTIALS={{ cachyos_restic_keys_dir }}/backup-amerenda.json
+
+          if [ -f {{ cachyos_restic_keys_dir }}/restic_password.txt ]; then
+              export RESTIC_PASSWORD=$(cat {{ cachyos_restic_keys_dir }}/restic_password.txt)
+          else
+              echo "Error: {{ cachyos_restic_keys_dir }}/restic_password.txt not found."
+              exit 1
+          fi
+
+          export RESTIC_REPO="{{ cachyos_restic_gcs_repo }}"
+
+          echo "Using include file: ${INCLUDE_FILE}"
+          echo "Using exclude file: ${EXCLUDE_FILE}"
+          echo "Repository: ${RESTIC_REPO}"
+
+          if restic snapshots -r "${RESTIC_REPO}" &>/dev/null; then
+              echo "Starting backup..."
+              restic backup -r "${RESTIC_REPO}" --files-from "${INCLUDE_FILE}" --exclude-file "${EXCLUDE_FILE}" --verbose
+          else
+              echo "Restic repository is not initialized or accessible. Initializing now..."
+              restic -r "${RESTIC_REPO}" init
+              if [ $? -eq 0 ]; then
+                  echo "Initialization successful. Starting backup..."
+                  restic backup -r "${RESTIC_REPO}" --files-from "${INCLUDE_FILE}" --exclude-file "${EXCLUDE_FILE}" --verbose
+              else
+                  echo "Failed to initialize repository."
+                  exit 1
+              fi
+          fi
+
+          unset GOOGLE_APPLICATION_CREDENTIALS
+          unset RESTIC_PASSWORD
+          unset RESTIC_REPO
+
+    - name: Install backup.service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=System Backup to GCS
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/backup.sh
+          User=root
+          Group=root
+      register: cachyos_backup_service_unit
+
+    - name: Install backup.timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run System Backup Daily at 2AM
+
+          [Timer]
+          OnCalendar=*-*-* 02:00:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      register: cachyos_backup_timer_unit
+
+    - name: Reload systemd daemon when backup units changed
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: cachyos_backup_service_unit.changed or cachyos_backup_timer_unit.changed
+
+    - name: Enable backup.timer
+      ansible.builtin.systemd:
+        name: backup.timer
+        enabled: true
+        state: started

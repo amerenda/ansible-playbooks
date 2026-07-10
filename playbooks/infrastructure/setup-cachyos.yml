@@ -1,0 +1,127 @@
+---
+# CachyOS / Arch gaming+GPU workstation bootstrap (inventory group `cachyos_workstations`,
+# currently: archlinux, lemurpro). Rebuilds archlinux from scratch after a CachyOS reinstall,
+# or converges it back to spec if drifted.
+#
+# Deliberately reuses existing, already-proven plays instead of re-deriving them:
+#   - setup-archlinux-k3s.yml   → k3s install-script prereqs (curl, ca-certificates)
+#   - setup-gpu-runtime.yml     → AMD/NVIDIA GPU vendor detection + base mesa/vulkan packages
+#   - setup-archlinux-komodo.yml → docker, base workstation packages (firefox/steam/code/
+#                                   bitwarden/dropbox/...), AUR helper, Komodo Periphery,
+#                                   ARC runner docker-gid alignment, docker DNS
+#   - k3s-agent.yml             → joins the k3s cluster (self-gated: skips if already joined,
+#                                  will NOT disrupt a live agent unless -e replace_cluster_bool=true)
+# New pieces only for what those don't already cover: ROCm extras, gaming extras (gamemode/
+# mangohud/lutris/proton-ge), dotfiles + SSH keys, Sunshine, joystick-notify, restic backup.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-cachyos.yml \
+#     --extra-vars "bws_access_token=<TOKEN>" --limit "archlinux,localhost"
+#
+# IMPORTANT: include localhost in --limit (comma-separated, not just "archlinux"). The first
+# play (fetch-secrets.yml) targets hosts: localhost — with a plain `--limit archlinux`, Ansible
+# silently skips that entire play ("no hosts matched"), so k3s_token/other BWS secrets never
+# get fetched and any task that needs them fails downstream. Verified by hitting this directly:
+# `--limit archlinux` alone produces "k3s_token must come from Bitwarden Secrets Manager" even
+# though a valid UUID is configured, purely because the fetch play never ran.
+#
+# Hard constraints (see /tmp/cachyos-install.md brief):
+#   - Never touches /mnt/storage
+#   - Never reboots the host
+#   - Never regenerates/rotates SSH keys, Komodo passkey, or k3s token — only redeploys
+#     existing BWS-sourced values
+
+- name: Fetch secrets from Bitwarden Secrets Manager
+  import_playbook: fetch-secrets.yml
+  tags: [secrets, bws, cachyos]
+
+- name: Arch Linux base packages for k3s
+  import_playbook: setup-archlinux-k3s.yml
+  tags: [cachyos, archlinux, k3s, prereqs]
+
+- name: GPU runtime (AMD/NVIDIA detection + base packages)
+  import_playbook: setup-gpu-runtime.yml
+  tags: [cachyos, gpu, gpu-runtime]
+
+- name: CachyOS workstation extras (ROCm, gaming, dotfiles, ssh keys, sunshine, joystick-notify, restic)
+  hosts: cachyos_workstations
+  become: yes
+  gather_facts: yes
+  tags: [cachyos]
+
+  tasks:
+    - name: ROCm extras (OpenCL, HIP SDK, PATH)
+      ansible.builtin.import_tasks: ../../tasks/cachyos-rocm-extras.yml
+      tags: [cachyos, gpu, rocm]
+
+    - name: Gaming extras (GameMode, MangoHud, Lutris, Proton-GE)
+      ansible.builtin.import_tasks: ../../tasks/cachyos-gaming.yml
+      tags: [cachyos, gaming]
+
+    - name: Dotfiles (clone + dotbot)
+      ansible.builtin.import_tasks: ../../tasks/cachyos-dotfiles.yml
+      tags: [cachyos, dotfiles]
+
+    - name: SSH keys (from BWS into dotfiles/ssh)
+      ansible.builtin.import_tasks: ../../tasks/cachyos-ssh-keys.yml
+      tags: [cachyos, ssh-keys]
+
+    - name: Sunshine game streaming
+      ansible.builtin.import_tasks: ../../tasks/cachyos-sunshine.yml
+      tags: [cachyos, sunshine]
+
+    - name: joystick-notify couch-mode switcher
+      ansible.builtin.import_tasks: ../../tasks/cachyos-joystick-notify.yml
+      tags: [cachyos, joystick-notify]
+
+    - name: restic backup to GCS
+      ansible.builtin.import_tasks: ../../tasks/cachyos-restic.yml
+      tags: [cachyos, restic, backup]
+
+- name: Docker + base workstation packages + Komodo Periphery
+  import_playbook: setup-archlinux-komodo.yml
+  tags: [cachyos, arch-komodo, arch-periphery, docker]
+
+- name: Join k3s cluster (self-gated — no-op if already joined)
+  import_playbook: k3s-agent.yml
+  vars:
+    k3s_agent_hosts: cachyos_workstations
+  tags: [cachyos, k3s, agent]
+
+- name: CachyOS bootstrap verification summary
+  hosts: cachyos_workstations
+  become: no
+  gather_facts: no
+  tags: [cachyos]
+
+  tasks:
+    - name: Verify expected packages are installed
+      ansible.builtin.command: >-
+        pacman -Q firefox steam docker alacritty zsh gamemode mangohud lutris
+        rocm-hip-runtime sunshine
+      register: cachyos_pkg_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify expected services are active
+      ansible.builtin.command: "systemctl is-active {{ item }}"
+      become: yes
+      register: cachyos_service_check
+      changed_when: false
+      failed_when: false
+      loop:
+        - docker
+        - k3s-agent
+        - komodo-periphery
+        - backup.timer
+
+    - name: Show CachyOS bootstrap summary
+      ansible.builtin.debug:
+        msg: |
+          Package check (pacman -Q ...): {{ 'ALL PRESENT' if cachyos_pkg_check.rc == 0 else 'MISSING SOME — see stderr' }}
+          {{ cachyos_pkg_check.stderr | default('') }}
+
+          Service checks:
+          {% for check in cachyos_service_check.results | default([]) %}
+          - {{ check.item }}: {{ check.stdout | default('unknown') }}
+          {% endfor %}

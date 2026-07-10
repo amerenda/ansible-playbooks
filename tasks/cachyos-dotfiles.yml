@@ -1,0 +1,111 @@
+---
+# Clone amerenda/dotfiles and run dotbot. dotbot itself is vendored as a git submodule and
+# idempotent (only touches symlinks that are wrong). ~/.ssh ends up as a symlink to
+# {{ cachyos_dotfiles_repo_dir }}/ssh (dotfiles/install.conf.yaml `link: ~/.ssh: ssh`) —
+# see tasks/cachyos-ssh-keys.yml for how the actual key *content* gets there.
+#
+# Bootstrap chicken-and-egg: on a genuinely fresh box the dotfiles repo (and therefore
+# ~/.ssh/github) doesn't exist yet, so the initial clone can't use it. We use a throwaway
+# temp key file (from the same BWS github_ssh_private_key secret) purely for that first
+# clone, then remove it. On a re-run (repo already present) this whole block is skipped —
+# `git pull` uses whatever key ~/.ssh/config already resolves for github.com.
+#
+# Required vars: cachyos_dotfiles_repo, cachyos_dotfiles_repo_dir (group_vars/cachyos.yml)
+
+- name: Check if dotfiles repo exists
+  ansible.builtin.stat:
+    path: "{{ cachyos_dotfiles_repo_dir }}/.git"
+  register: cachyos_dotfiles_repo_check
+  become: false
+
+- name: Bootstrap-clone dotfiles repo (first run only)
+  when: not cachyos_dotfiles_repo_check.stat.exists
+  become: false
+  block:
+    - name: Resolve fetched github SSH key secret
+      ansible.builtin.set_fact:
+        cachyos_github_key_value: "{{ hostvars['localhost']['fetched_secrets']['github_ssh_private_key'] | default('') }}"
+      no_log: true
+
+    - name: Fail if github SSH key is not yet in BWS
+      ansible.builtin.fail:
+        msg: |
+          dotfiles repo is not cloned on this host and github_ssh_private_key is not yet in
+          BWS (group_vars/k3s.yml bws_secrets UUID is blank). Add the secret in the BWS
+          'servers' project, wire the UUID in, and re-run.
+      when: (cachyos_github_key_value | length) == 0
+
+    - name: Write throwaway clone key to a temp path
+      ansible.builtin.tempfile:
+        state: file
+        suffix: cachyos-github-clone-key
+      register: cachyos_clone_key_tmp
+
+    - name: Populate throwaway clone key
+      ansible.builtin.copy:
+        content: "{{ cachyos_github_key_value }}"
+        dest: "{{ cachyos_clone_key_tmp.path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Clone amerenda/dotfiles using throwaway key
+      ansible.builtin.git:
+        repo: "{{ cachyos_dotfiles_repo }}"
+        dest: "{{ cachyos_dotfiles_repo_dir }}"
+        version: master
+        key_file: "{{ cachyos_clone_key_tmp.path }}"
+        accept_hostkey: yes
+
+  always:
+    - name: Remove throwaway clone key
+      ansible.builtin.file:
+        path: "{{ cachyos_clone_key_tmp.path }}"
+        state: absent
+      when: cachyos_clone_key_tmp is defined
+
+- name: Check dotfiles working tree is clean before pulling
+  ansible.builtin.command: "git -C {{ cachyos_dotfiles_repo_dir }} status --porcelain"
+  become: false
+  register: cachyos_dotfiles_status
+  changed_when: false
+  when: cachyos_dotfiles_repo_check.stat.exists
+
+- name: Warn and skip pull if dotfiles has local uncommitted changes
+  ansible.builtin.debug:
+    msg: |
+      ~/projects/dotfiles has uncommitted local changes — skipping `git pull` so nothing gets
+      clobbered. Commit or stash them yourself, then re-run this playbook to pick up updates.
+      dotbot will still run below against whatever is currently checked out.
+  when:
+    - cachyos_dotfiles_repo_check.stat.exists
+    - (cachyos_dotfiles_status.stdout | default('')) | length > 0
+
+- name: Pull latest dotfiles repo
+  ansible.builtin.shell: "git -C {{ cachyos_dotfiles_repo_dir }} pull --ff-only"
+  become: false
+  changed_when: false
+  when:
+    - cachyos_dotfiles_repo_check.stat.exists
+    - (cachyos_dotfiles_status.stdout | default('')) | length == 0
+
+- name: Run dotfiles install (submodule init + dotbot link)
+  ansible.builtin.command: ./install
+  args:
+    chdir: "{{ cachyos_dotfiles_repo_dir }}"
+  become: false
+  register: cachyos_dotbot_install
+  # dotbot exits non-zero if ANY configured link source is missing from the repo (e.g. a
+  # stale install.conf.yaml entry), even when every other link is correctly set up. Verify
+  # actual link state below instead of trusting dotbot's exit code.
+  changed_when: "'Creating link' in cachyos_dotbot_install.stdout"
+  failed_when: false
+
+- name: Warn if dotbot reported problems
+  ansible.builtin.debug:
+    msg: |
+      dotbot exited non-zero (rc={{ cachyos_dotbot_install.rc }}). This usually means
+      install.conf.yaml references a source file that no longer exists in the repo — check
+      for "Nonexistent source" lines below; those are stale dotfiles repo entries, not an
+      ansible problem. All *other* links are still correctly set up.
+      {{ cachyos_dotbot_install.stdout }}
+  when: cachyos_dotbot_install.rc != 0

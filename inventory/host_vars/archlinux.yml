@@ -3,3 +3,8 @@
 # Host vars merge reliably for ansible_connection=local; group_vars/archlinux_k3s.yml mirrors these.
 longhorn_host_disk_path: /mnt/storage/longhorn
 longhorn_k8s_namespace: default
+
+# [all:vars] in inventory.ini defaults ansible_ssh_private_key_file to ~/.ssh/alex_id_ed25519,
+# but the key actually authorized on archlinux (from murderbot's ~/.ssh/config `Host archlinux`)
+# is ~/.ssh/id_ed25519. Override here so driving archlinux over SSH from murderbot works.
+ansible_ssh_private_key_file: ~/.ssh/id_ed25519

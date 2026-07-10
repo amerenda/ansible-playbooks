@@ -1,0 +1,54 @@
+---
+# Write SSH keys into the dotfiles repo's ssh/ directory (NOT directly into ~/.ssh).
+# ~/.ssh is a dotbot-managed symlink to {{ cachyos_dotfiles_repo_dir }}/ssh (see
+# dotfiles/install.conf.yaml `link: ~/.ssh: ssh`) and private keys are gitignored/untracked
+# there, so they must be re-seeded from BWS on a rebuild. Writing directly to ~/.ssh would be
+# clobbered by a later `dotbot -c install.conf.yaml` run (relink: true).
+#
+# Requires: cachyos_dotfiles_repo_dir to already exist (run after the dotfiles clone step —
+# see tasks/cachyos-dotfiles.yml). Requires vars: cachyos_ssh_keys (group_vars/cachyos.yml).
+# Secret values come from hostvars['localhost']['fetched_secrets'] (fetch-secrets.yml).
+
+- name: Resolve fetched SSH key secrets
+  ansible.builtin.set_fact:
+    cachyos_ssh_fetched_secrets: "{{ hostvars['localhost']['fetched_secrets'] | default({}) }}"
+  no_log: true
+
+- name: Determine which SSH keys have a value available from BWS
+  ansible.builtin.set_fact:
+    cachyos_ssh_keys_available: >-
+      {{ cachyos_ssh_keys | selectattr('secret_key', 'in', cachyos_ssh_fetched_secrets.keys() | list) | list }}
+    cachyos_ssh_keys_missing: >-
+      {{ cachyos_ssh_keys | rejectattr('secret_key', 'in', cachyos_ssh_fetched_secrets.keys() | list) | map(attribute='secret_key') | list }}
+  no_log: true
+
+- name: Warn about SSH keys not yet in BWS (skipping, not failing)
+  ansible.builtin.debug:
+    msg: |
+      Skipping SSH key(s) not yet in BWS: {{ cachyos_ssh_keys_missing | join(', ') }}.
+      Add them under group_vars/k3s.yml bws_secrets (UUIDs currently blank) once created
+      in the BWS 'servers' project, then re-run this playbook.
+  when: cachyos_ssh_keys_missing | length > 0
+
+- name: Ensure dotfiles ssh/ directory exists with correct permissions
+  ansible.builtin.file:
+    path: "{{ cachyos_dotfiles_repo_dir }}/ssh"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0700"
+  become: false
+  when: cachyos_ssh_keys_available | length > 0
+
+- name: Write SSH keys into dotfiles/ssh from BWS
+  ansible.builtin.copy:
+    content: "{{ cachyos_ssh_fetched_secrets[item.secret_key] }}"
+    dest: "{{ cachyos_dotfiles_repo_dir }}/ssh/{{ item.name }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "{{ item.mode }}"
+  become: false
+  no_log: true
+  loop: "{{ cachyos_ssh_keys_available }}"
+  loop_control:
+    label: "{{ item.name }}"

@@ -1,0 +1,79 @@
+---
+# Sunshine game streaming, AMD RX 9070 XT-optimized config, from amerenda/archlinux.
+# The repo's install.sh is already idempotent (install -D, systemd --user enable --now,
+# backs up a differing sunshine.conf before overwriting) and must run as the normal user
+# (it refuses EUID 0; it calls `sudo` itself for the two root-only steps).
+#
+# Required vars: cachyos_archlinux_repo, cachyos_archlinux_repo_dir (group_vars/cachyos.yml)
+
+- name: Ensure sunshine + moonlight-qt packages are present
+  community.general.pacman:
+    name:
+      - sunshine
+      - moonlight-qt
+    state: present
+    update_cache: yes
+  when: ansible_distribution == 'Archlinux'
+
+- name: Check if amerenda/archlinux (sunshine config) repo exists
+  ansible.builtin.stat:
+    path: "{{ cachyos_archlinux_repo_dir }}/.git"
+  register: cachyos_archlinux_repo_check
+  become: false
+
+- name: Clone amerenda/archlinux repo
+  ansible.builtin.git:
+    repo: "{{ cachyos_archlinux_repo }}"
+    dest: "{{ cachyos_archlinux_repo_dir }}"
+    version: master
+  become: false
+  when: not cachyos_archlinux_repo_check.stat.exists
+
+- name: Check amerenda/archlinux working tree is clean before pulling
+  ansible.builtin.command: "git -C {{ cachyos_archlinux_repo_dir }} status --porcelain"
+  become: false
+  register: cachyos_archlinux_repo_status
+  changed_when: false
+  when: cachyos_archlinux_repo_check.stat.exists
+
+- name: Warn and skip pull if amerenda/archlinux has local uncommitted changes
+  ansible.builtin.debug:
+    msg: |
+      {{ cachyos_archlinux_repo_dir }} has uncommitted local changes — skipping `git pull` so
+      nothing gets clobbered. Commit or stash them yourself, then re-run this playbook.
+  when:
+    - cachyos_archlinux_repo_check.stat.exists
+    - (cachyos_archlinux_repo_status.stdout | default('')) | length > 0
+
+- name: Pull latest amerenda/archlinux repo
+  ansible.builtin.shell: "git -C {{ cachyos_archlinux_repo_dir }} pull --ff-only"
+  become: false
+  changed_when: false
+  when:
+    - cachyos_archlinux_repo_check.stat.exists
+    - (cachyos_archlinux_repo_status.stdout | default('')) | length == 0
+
+- name: Run Sunshine installer (idempotent — install -D + systemd enable --now)
+  ansible.builtin.command: "{{ cachyos_archlinux_repo_dir }}/install.sh"
+  args:
+    chdir: "{{ cachyos_archlinux_repo_dir }}"
+  become: false
+  register: cachyos_sunshine_install
+  # install.sh always prints "Done!" at the end regardless of whether anything changed
+  # (install -D + systemd enable --now are themselves idempotent no-ops when already
+  # correct) — there's no reliable signal in its output to detect real changes.
+  changed_when: false
+
+- name: Verify sunshine.service (user) is active
+  ansible.builtin.command: "systemctl --user is-active sunshine.service"
+  become: false
+  register: cachyos_sunshine_active
+  changed_when: false
+  failed_when: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+
+- name: Show Sunshine service status
+  ansible.builtin.debug:
+    msg: "sunshine.service: {{ cachyos_sunshine_active.stdout | default('unknown') }}"

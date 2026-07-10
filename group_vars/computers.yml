@@ -5,6 +5,10 @@
 timezone: "America/New_York"
 cachyos_workstation_enabled: true
 
+# Note: no `code` (official repo VSCode) here — it conflicts with `visual-studio-code-bin`
+# below (AUR, same provided files/binary). Verified by actually attempting the install:
+# "code-1.127.0-1 and visual-studio-code-bin-1.90.2-1 are in conflict". Keeping the AUR
+# build since that's what's actually installed/in use (proper MS marketplace access).
 archlinux_workstation_pacman_packages:
   - docker
   - docker-compose
@@ -18,7 +22,6 @@ archlinux_workstation_pacman_packages:
   - vim
   - firefox
   - steam
-  - code
   - cryptomator
   - kubectl
   - helm
@@ -43,13 +46,26 @@ archlinux_workstation_pacman_packages:
   - yubikey-manager
   - docker-buildx
   - bitwarden
-  - bitwarden-cli
+  # bitwarden-cli intentionally excluded: current repo version hard-depends on the specific
+  # `nodejs-lts-jod` package, which conflicts with plain `nodejs` (already installed on
+  # archlinux for other dev tooling — they can't coexist, same file ownership). Verified by
+  # actually attempting the install: `pacman -Sy --needed ... bitwarden-cli` failed with
+  # "nodejs-lts-jod and nodejs are in conflict". The Bitwarden desktop app (`bitwarden`,
+  # above) already covers vault access; add bitwarden-cli back only if something later
+  # genuinely needs the `bw` CLI, in which case plain `nodejs` will need to go.
 
 archlinux_workstation_aur_packages:
   - cursor-bin
   - dropbox
   - visual-studio-code-bin
-  - nordvpn-bin
+  # nordvpn-bin intentionally excluded for now — conflicts with `nordvpn` (official repo
+  # package, community/extra), which is what's actually installed and running
+  # (nordvpnd.service) on archlinux today. Needs a decision: keep official `nordvpn`
+  # (drop this AUR entry for good) or migrate to `nordvpn-bin` (this entry stays, but
+  # requires removing the official package first — a real client switch, not a no-op).
+  # Verified by actually attempting the install: "nordvpn-bin-5.2.0-1 and nordvpn-3.17.0-1
+  # are in conflict."
+  # - nordvpn-bin
   - nordpass-bin
   - kubectx
   - d2-bin
@@ -68,7 +84,6 @@ archlinux_workstation_verify_commands:
   - kubectl
   - terraform
   - bws
-  - bw
   - bitwarden
 
 compose_repo: "git@github.com:amerenda/komodo-dean-gitops.git"

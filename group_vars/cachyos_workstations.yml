@@ -1,0 +1,78 @@
+---
+# CachyOS / Arch workstation gaming + GPU extras (inventory group `cachyos_workstations`).
+# Base workstation packages (Firefox, Steam, Docker, Bitwarden, etc.) already live in
+# group_vars/computers.yml (archlinux_workstation_pacman_packages / _aur_packages) and are
+# installed by setup-archlinux-komodo.yml. This file only adds packages that play doesn't
+# already cover: gaming extras and ROCm pieces beyond the base HIP runtime.
+#
+# All verified present in official repos / AUR as of 2026-07-10 (pacman -Si / paru -Si).
+
+cachyos_gaming_pacman_packages:
+  - gamemode
+  - lib32-gamemode
+  - mangohud
+  - lib32-mangohud
+  - lutris
+
+cachyos_gaming_aur_packages:
+  - proton-ge-custom-bin
+
+# Base ROCm stack for host-side monitoring/debugging (rocm-smi, rocminfo, amdgpu_top). Small
+# footprint (~40MB). Was previously installed manually (untracked by ansible) — managed here
+# now so a rebuild actually reproduces it.
+cachyos_rocm_base_packages:
+  - rocm-hip-runtime
+  - rocminfo
+  - rocm-smi-lib
+
+# Deliberately NOT installing rocm-hip-sdk / rocm-opencl-runtime here, despite the original
+# brief requesting them: rocm-hip-sdk alone pulls ~28 packages / ~22GB installed (full HIP
+# compiler toolchain + rocBLAS/MIOpen/RCCL/etc — a dev SDK for *building* GPU code). Verified
+# by actually attempting the install: it failed with "Partition / too full" (archlinux root is
+# 79G/85% full, only ~12G free). Nothing on this host needs it — ollama runs via
+# ollama/ollama:rocm, which bundles its own ROCm userspace in the container image and only
+# needs the host kernel driver + /dev/kfd + /dev/dri (already present), not host HIP/OpenCL
+# packages. Leave this list empty unless a real future workload needs to compile ROCm code
+# on the host.
+cachyos_rocm_extra_packages: []
+
+# /opt/rocm/bin is not on PATH by default on Arch — rocminfo/rocm-smi are unusable without it.
+cachyos_rocm_profile_path: /etc/profile.d/rocm.sh
+
+# Sunshine + joystick-notify installers live in their own repos and already do the right
+# thing idempotently (install -D, systemctl --user enable --now). We clone/pull + re-run them
+# rather than re-deriving each file copy in Ansible.
+cachyos_archlinux_repo: "git@github.com:amerenda/archlinux.git"
+cachyos_archlinux_repo_dir: "/home/{{ ansible_user }}/projects/archlinux"
+cachyos_joystick_notify_repo: "git@github.com:amerenda/joystick-notify.git"
+cachyos_joystick_notify_repo_dir: "/home/{{ ansible_user }}/projects/joystick-notify"
+
+# dotfiles: ~/.ssh is a dotbot-managed symlink to ~/projects/dotfiles/ssh (see
+# dotfiles/install.conf.yaml `link: ~/.ssh: ssh`). Private keys are gitignored/untracked in
+# that repo (only *.pub and *.gpg are committed) — they must be placed into
+# ~/projects/dotfiles/ssh/ from BWS *before* relying on the symlink. Write there, not
+# directly to ~/.ssh, so a later dotbot re-run (relink: true) can't clobber them.
+cachyos_dotfiles_repo: "git@github.com:amerenda/dotfiles.git"
+cachyos_dotfiles_repo_dir: "/home/{{ ansible_user }}/projects/dotfiles"
+
+cachyos_ssh_keys:
+  - name: alex_id_ed25519
+    secret_key: alex_id_ed25519_private_key
+    mode: "0600"
+  - name: alex_id_ed25519.pub
+    secret_key: alex_id_ed25519_public_key
+    mode: "0644"
+  - name: github
+    secret_key: github_ssh_private_key
+    mode: "0600"
+  - name: github.pub
+    secret_key: github_ssh_public_key
+    mode: "0644"
+
+# restic backup (system-level, GCS-backed). Matches /usr/local/sbin/backup.sh already
+# installed on archlinux: restic repo gs:amerenda-backups:/<hostname>, GCP SA key at
+# /etc/backup-keys/backup-amerenda.json, repo password at /etc/backup-keys/restic_password.txt.
+cachyos_restic_gcs_repo: "gs:amerenda-backups:/{{ inventory_hostname }}"
+cachyos_restic_keys_dir: /etc/backup-keys
+cachyos_restic_sa_key_secret: restic_backup_gcp_sa_key
+cachyos_restic_password_secret: restic_backup_repo_password

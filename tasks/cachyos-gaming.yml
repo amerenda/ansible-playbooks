@@ -1,0 +1,44 @@
+---
+# Gaming extras not already covered by group_vars/computers.yml (steam, cursor-bin etc are
+# installed by setup-archlinux-komodo.yml). Requires multilib repo enabled (lib32-* packages).
+#
+# Required vars: cachyos_gaming_pacman_packages, cachyos_gaming_aur_packages (group_vars/cachyos.yml)
+
+- name: Check multilib repo is enabled (required for lib32-gamemode / lib32-mangohud)
+  ansible.builtin.command: /usr/bin/pacman-conf --repo-list
+  register: cachyos_multilib_check
+  changed_when: false
+
+- name: Fail with hint if multilib repo is not enabled
+  ansible.builtin.fail:
+    msg: |
+      multilib repo is not enabled in /etc/pacman.conf. Enable it (uncomment the
+      [multilib] block) and run `pacman -Sy` before re-running this playbook.
+  when: "'multilib' not in cachyos_multilib_check.stdout_lines"
+
+- name: Install gaming packages (official repos)
+  community.general.pacman:
+    name: "{{ cachyos_gaming_pacman_packages }}"
+    state: present
+    update_cache: yes
+  when: cachyos_multilib_check.rc == 0
+
+- name: Install gaming packages (AUR via paru)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    paru -S --noconfirm --needed {{ cachyos_gaming_aur_packages | join(' ') }}
+  args:
+    executable: /bin/bash
+  become: false
+  when:
+    - cachyos_gaming_aur_packages | length > 0
+    - "'multilib' in cachyos_multilib_check.stdout_lines"
+  register: cachyos_gaming_aur_result
+  changed_when: "'nothing to do' not in cachyos_gaming_aur_result.stdout | default('')"
+
+- name: Add target user to gamemode group (allows unprivileged rt priority via GameMode)
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: gamemode
+    append: yes
+  when: cachyos_multilib_check.rc == 0

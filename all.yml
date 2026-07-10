@@ -63,3 +63,12 @@
   import_playbook: playbooks/infrastructure/setup-debian-komodo.yml
   tags: [debian-komodo, debian-bws, debian-periphery, debian-media-dirs]
 
+# archlinux — CachyOS gaming/GPU workstation bootstrap (k3s agent + Longhorn storage node +
+# Komodo Periphery + ROCm/gaming + dotfiles). Not part of the default k3s cluster run.
+# Run standalone: ansible-playbook -i inventory/inventory.ini \
+#   playbooks/infrastructure/setup-cachyos.yml \
+#   --extra-vars "bws_access_token=<TOKEN>" --limit archlinux
+- name: Setup CachyOS workstation (archlinux)
+  import_playbook: playbooks/infrastructure/setup-cachyos.yml
+  tags: [cachyos, gpu, rocm, gaming, dotfiles, ssh-keys, sunshine, joystick-notify, restic]
+
