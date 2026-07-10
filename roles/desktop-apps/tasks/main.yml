@@ -10,13 +10,7 @@
   args:
     executable: /bin/bash
   become: false
-  loop:
-    - visual-studio-code-bin
-    - cursor-bin
-    - dropbox
-    - nordpass-bin
-    - nordvpn
-    - amdgpu_top
+  loop: "{{ cachyos_aur_packages }}"
   tags: [desktop-apps, aur]
 
 - name: Enable Dropbox user service
