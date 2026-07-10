@@ -45,18 +45,16 @@
     mode: "0755"
   tags: [sunshine, scripts]
 
-# cursor-stream-hide/show scripts — check if they exist in the repo sunshine/ dir
+# cursor-stream-hide/show scripts — install only if present in the repo
 - name: Install cursor-stream scripts if present in sunshine dir
   ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/sunshine/{{ item }}"
-    dest: "/usr/local/bin/{{ item }}"
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item | basename }}"
     owner: root
     group: root
     mode: "0755"
-  loop:
-    - cursor-stream-hide.sh
-    - cursor-stream-show.sh
-  failed_when: false
+  with_fileglob:
+    - "{{ cachyos_joystick_notify_src }}/sunshine/cursor-stream-*.sh"
   tags: [sunshine, scripts]
 
 # ── Config ─────────────────────────────────────────────────────────────────────
