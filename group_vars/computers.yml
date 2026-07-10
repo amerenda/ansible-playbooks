@@ -47,7 +47,6 @@ archlinux_workstation_aur_packages:
   - cursor-bin
   - dropbox
   - visual-studio-code-bin
-  - nordvpn-bin
   - nordpass-bin
   - kubectx
   - d2-bin
