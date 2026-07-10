@@ -43,7 +43,6 @@ archlinux_workstation_pacman_packages:
   - yubikey-manager
   - docker-buildx
   - bitwarden
-  - bitwarden-cli
 
 archlinux_workstation_aur_packages:
   - cursor-bin
