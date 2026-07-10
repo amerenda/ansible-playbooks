@@ -13,6 +13,15 @@
     append: true
   tags: [amd-gpu, groups]
 
+- name: Ensure /etc/environment.d exists
+  ansible.builtin.file:
+    path: /etc/environment.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [amd-gpu, rocm, vulkan]
+
 - name: Set HSA_OVERRIDE_GFX_VERSION for RDNA 4 compatibility
   ansible.builtin.copy:
     content: |
