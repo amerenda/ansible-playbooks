@@ -33,7 +33,7 @@
 
 - name: Install joystick-notify tray app
   ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-notify-tray.py"
+    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-tray.py"
     dest: /usr/local/bin/joystick-notify-tray
     owner: root
     group: root
@@ -184,14 +184,26 @@
 
 # ── Enable user services ──────────────────────────────────────────────────────
 
+- name: Enable user lingering so systemd user instance runs without active login
+  ansible.builtin.command: loginctl enable-linger {{ cachyos_user }}
+  changed_when: false
+  tags: [joystick-notify, service]
+
+- name: Wait for user systemd bus socket
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ cachyos_user_uid }}/bus"
+    timeout: 10
+  become: false
+  tags: [joystick-notify, service]
+
 - name: Reload user systemd daemon
   ansible.builtin.systemd:
     daemon_reload: true
     scope: user
   become: false
   environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
-    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [joystick-notify, service]
 
 - name: Enable joystick-notify user services
@@ -202,8 +214,8 @@
     scope: user
   become: false
   environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
-    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   loop:
     - joystick-notify.service
     - joystick-notify-steam-shutdown.path
