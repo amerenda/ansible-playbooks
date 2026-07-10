@@ -1,0 +1,190 @@
+---
+# CachyOS workstation variables (group: cachyos_workstations)
+# Used by: playbooks/infrastructure/setup-cachyos.yml
+
+cachyos_user: alex
+cachyos_user_home: "/home/alex"
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+
+cachyos_pacman_packages:
+  # Base
+  - base
+  - base-devel
+  - sudo
+  - zsh
+  - zsh-autosuggestions
+  - git
+  - git-lfs
+  - vim
+  - tmux
+  - curl
+  - wget
+  - unzip
+  - rsync
+  - bc
+  - tree
+  - htop
+  - iotop
+  - net-tools
+  - inetutils
+  - less
+  - reflector
+  - expac
+  - downgrade
+  - lshw
+  - ethtool
+  - vnstat
+  # System / networking
+  - networkmanager
+  - openssh
+  - avahi
+  - nss-mdns
+  - bluez
+  - bluez-utils
+  - pipewire
+  - pipewire-pulse
+  - pipewire-alsa
+  - wireplumber
+  - alsa-utils
+  - keyd
+  - tailscale
+  # KDE Plasma 6
+  - plasma-meta
+  - sddm
+  - dolphin
+  - konsole
+  - ark
+  - gwenview
+  - kdeconnect
+  - plasma-pa
+  - plasma-nm
+  - kscreen
+  - alacritty
+  # AMD GPU (gfx1201 / RDNA 4)
+  - mesa
+  - lib32-mesa
+  - vulkan-radeon
+  - lib32-vulkan-radeon
+  - libva-mesa-driver
+  - lib32-libva-mesa-driver
+  - libva-utils
+  - xf86-video-amdgpu
+  - radeontop
+  # ROCm
+  - rocm-hip-runtime
+  - rocm-opencl-runtime
+  - rocm-smi-lib
+  - rocminfo
+  # Gaming (lib32 requires multilib)
+  - steam
+  - lutris
+  - mangohud
+  - lib32-mangohud
+  - gamemode
+  - lib32-gamemode
+  - gamescope
+  # Kernel headers + DKMS modules
+  - linux-headers
+  - dkms
+  - xpadneo-dkms
+  - xone-dkms
+  # Infrastructure / devtools
+  - docker
+  - docker-compose
+  - docker-buildx
+  - kubectl
+  - helm
+  - terraform
+  - tflint
+  - github-cli
+  - direnv
+  - restic
+  - yq
+  - httpie
+  - jq
+  - openssl
+  - gnupg
+  - python
+  - python-pip
+  - python-pyqt6
+  # Desktop apps
+  - firefox
+  - bitwarden
+  - keepassxc
+  - cryptomator
+  - syncthing
+  # Joystick-notify system dep
+  - realtime-privileges
+  - evtest
+  - hid-tools
+  # Utilities
+  - eza
+  - bat
+  - fzf
+  - ripgrep
+  - ufw
+  - yubikey-manager
+
+# AUR packages — installed via paru after paru bootstrap
+cachyos_aur_packages:
+  - visual-studio-code-bin
+  - cursor-bin
+  - dropbox
+  - nordpass-bin
+  - nordvpn
+  - amdgpu_top
+  - sunshine
+  - proton-ge-custom-bin
+  - game-devices-udev
+
+# ── Services ──────────────────────────────────────────────────────────────────
+
+cachyos_system_services:
+  - NetworkManager
+  - sshd
+  - docker
+  - avahi-daemon
+  - bluetooth
+  - keyd
+  - tailscaled
+
+cachyos_user_services:
+  - joystick-notify.service
+  - joystick-notify-steam-shutdown.path
+  - joystick-notify-tray.service
+  - sunshine.service
+  - syncthing.service
+
+# ── k3s agent ─────────────────────────────────────────────────────────────────
+
+cachyos_k3s_version: "v1.33.5+k3s1"
+cachyos_k3s_server: "https://10.100.20.10:6443"
+cachyos_k3s_node_name: "{{ inventory_hostname }}"
+cachyos_k3s_node_ip: "{{ archlinux_ip }}"
+
+# ── Dotfiles ──────────────────────────────────────────────────────────────────
+
+cachyos_dotfiles_repo: "git@github.com:amerenda/dotfiles.git"
+cachyos_dotfiles_dest: "{{ cachyos_user_home }}/projects/dotfiles"
+
+# ── Joystick-notify source (local path on the Ansible control node) ───────────
+
+cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
+
+# ── ROCm ──────────────────────────────────────────────────────────────────────
+
+# gfx1201 (RDNA 4 / RX 9070 XT) — may need HSA version override for some ROCm tools
+cachyos_rocm_gfx_override: "11.0.0"
+
+# ── MoonDeck ──────────────────────────────────────────────────────────────────
+
+moondeck_version: "1.9.0"
+
+# ── BWS secret names for SSH keys ─────────────────────────────────────────────
+
+cachyos_bws_secrets:
+  ssh_alex_private: "alex-id-ed25519-private-key"
+  ssh_alex_public: "alex-id-ed25519-public-key"
+  ssh_github_private: "github-ssh-private-key"
+  ssh_github_public: "github-ssh-public-key"

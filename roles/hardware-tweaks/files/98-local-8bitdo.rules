@@ -1,0 +1,37 @@
+# Local 8BitDo rules (do NOT override the packaged /usr/lib/udev/rules.d/71-8bitdo-controllers.rules)
+#
+# Why this file exists:
+# - The distro package `game-devices-udev` already ships comprehensive 8BitDo rules.
+# - Installing a same-named file into /etc/udev/rules.d/ would override those rules and can break 2.4GHz dongles.
+# - Keep our local tweaks in a separate rules file with a different name.
+
+# -------------------------------------------------------------------
+# Bluetooth adapter power-save mitigation (Realtek Bluetooth Controller on ASUS boards)
+# -------------------------------------------------------------------
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0b05", ATTR{idProduct}=="1bf6", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0b05", ATTR{idProduct}=="1bf6", TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
+
+# -------------------------------------------------------------------
+# 8BitDo Ultimate 2 Wireless over Bluetooth (VID/PID 2dc8:6012)
+# Give user-session access to hidraw so Steam/SDL HIDAPI can open it.
+# -------------------------------------------------------------------
+KERNEL=="hidraw*", KERNELS=="*2DC8:6012*", MODE="0660", TAG+="uaccess"
+
+# -------------------------------------------------------------------
+# 8BitDo 2.4GHz dongle sometimes enumerates as "8BitDo IDLE" (2dc8:3109)
+# This does NOT make it a joystick device, but allows Steam/SDL HIDAPI to open it.
+# -------------------------------------------------------------------
+KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="3109", MODE="0660", TAG+="uaccess"
+
+# -------------------------------------------------------------------
+# 8BitDo Ultimate 2 Wireless Controller for PC (2.4GHz receiver)
+# Allow Steam/SDL HIDAPI to open the hidraw nodes.
+# -------------------------------------------------------------------
+KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="310b", MODE="0660", TAG+="uaccess"
+
+# Bind the XInput vendor interface to the kernel `xpad` driver so the device shows up
+# as a proper game controller (instead of only keyboard/mouse HID).
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", ATTR{idProduct}=="310b", RUN+="/sbin/modprobe xpad", RUN+="/bin/sh -c 'echo 2dc8 310b > /sys/bus/usb/drivers/xpad/new_id'"
+
+# Some firmwares enumerate briefly as "Ultimate 2" before switching to 310b.
+KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="6013", MODE="0660", TAG+="uaccess"

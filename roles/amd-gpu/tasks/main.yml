@@ -1,0 +1,59 @@
+---
+# Role: amd-gpu
+# AMD RDNA 4 (gfx1201 / RX 9070 XT) — Mesa, Vulkan, VA-API, ROCm.
+# Packages are already in cachyos_pacman_packages (installed by common role).
+# This role handles group membership and ROCm environment config.
+
+- name: Add user to video and render groups (GPU access)
+  ansible.builtin.user:
+    name: "{{ cachyos_user }}"
+    groups:
+      - video
+      - render
+    append: true
+  tags: [amd-gpu, groups]
+
+- name: Set HSA_OVERRIDE_GFX_VERSION for RDNA 4 compatibility
+  ansible.builtin.copy:
+    content: |
+      # RDNA 4 (gfx1201) ROCm compatibility override
+      # Required for tools that query gfx version and don't yet list gfx1201 in their supported list.
+      HSA_OVERRIDE_GFX_VERSION={{ cachyos_rocm_gfx_override }}
+    dest: /etc/environment.d/99-rocm-gfx-override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [amd-gpu, rocm]
+
+- name: Set RADV as default Vulkan driver
+  ansible.builtin.copy:
+    content: |
+      # Prefer Mesa RADV Vulkan driver over AMDVLK
+      AMD_VULKAN_ICD=RADV
+      VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json:/usr/share/vulkan/icd.d/radeon_icd.i686.json
+    dest: /etc/environment.d/99-amd-vulkan.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [amd-gpu, vulkan]
+
+- name: Load amdgpu kernel module at boot
+  ansible.builtin.copy:
+    content: |
+      amdgpu
+    dest: /etc/modules-load.d/amdgpu.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [amd-gpu, kernel]
+
+- name: Set amdgpu kernel parameters in modprobe
+  ansible.builtin.copy:
+    content: |
+      # Enable hardware video encode/decode acceleration
+      options amdgpu ppfeaturemask=0xffffffff
+    dest: /etc/modprobe.d/amdgpu.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [amd-gpu, kernel]

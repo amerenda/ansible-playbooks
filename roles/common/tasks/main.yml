@@ -1,0 +1,108 @@
+---
+# Role: common
+# Sets locale, timezone, default shell, multilib repo, base packages, and paru AUR helper.
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone | default('America/New_York') }}"
+  tags: [common, timezone]
+
+- name: Set locale
+  ansible.builtin.locale_gen:
+    name: en_US.UTF-8
+    state: present
+  tags: [common, locale]
+
+- name: Set default locale
+  ansible.builtin.copy:
+    content: |
+      LANG=en_US.UTF-8
+      LC_ALL=en_US.UTF-8
+    dest: /etc/locale.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [common, locale]
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ cachyos_k3s_node_name | default(inventory_hostname) }}"
+    use: systemd
+  tags: [common, hostname]
+
+# ── Multilib (needed for lib32-* gaming/GPU packages) ─────────────────────────
+
+- name: Enable multilib repository in pacman.conf
+  ansible.builtin.shell: |
+    if grep -qE '^\[multilib\]' /etc/pacman.conf; then
+      echo "already_enabled"
+      exit 0
+    fi
+    sed -i '/^#\[multilib\]/{N;s/#\[multilib\]\n#Include/[multilib]\nInclude/}' /etc/pacman.conf
+    echo "enabled"
+  args:
+    executable: /bin/bash
+  register: multilib_result
+  changed_when: "'enabled' in multilib_result.stdout"
+  tags: [common, multilib, pacman]
+
+- name: Update pacman package cache
+  community.general.pacman:
+    update_cache: true
+  tags: [common, pacman]
+
+# ── Base packages ──────────────────────────────────────────────────────────────
+
+- name: Install base system packages
+  community.general.pacman:
+    name: "{{ cachyos_pacman_packages }}"
+    state: present
+  tags: [common, packages, pacman]
+
+# ── AUR helper — paru ─────────────────────────────────────────────────────────
+
+- name: Check if paru is installed
+  ansible.builtin.command: which paru
+  register: paru_check
+  changed_when: false
+  failed_when: false
+  become: false
+  tags: [common, paru, aur]
+
+- name: Ensure paru build directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.cache/paru-build"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  when: paru_check.rc != 0
+  tags: [common, paru, aur]
+
+- name: Clone paru from AUR
+  ansible.builtin.git:
+    repo: https://aur.archlinux.org/paru.git
+    dest: "{{ cachyos_user_home }}/.cache/paru-build/paru"
+    update: true
+  become: false
+  when: paru_check.rc != 0
+  tags: [common, paru, aur]
+
+- name: Build and install paru
+  ansible.builtin.shell: |
+    set -euo pipefail
+    makepkg -si --noconfirm --needed
+  args:
+    chdir: "{{ cachyos_user_home }}/.cache/paru-build/paru"
+    executable: /bin/bash
+  become: false
+  when: paru_check.rc != 0
+  tags: [common, paru, aur]
+
+# ── Set default shell ──────────────────────────────────────────────────────────
+
+- name: Set zsh as default shell for user
+  ansible.builtin.user:
+    name: "{{ cachyos_user }}"
+    shell: /usr/bin/zsh
+  tags: [common, shell]

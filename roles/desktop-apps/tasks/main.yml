@@ -1,0 +1,33 @@
+---
+# Role: desktop-apps
+# AUR desktop applications: VSCode, Cursor, Dropbox, NordPass, NordVPN, amdgpu_top.
+# Firefox and Bitwarden are in cachyos_pacman_packages (installed by common role).
+
+- name: Install AUR desktop applications
+  ansible.builtin.shell: |
+    set -euo pipefail
+    paru -S --noconfirm --needed {{ item }}
+  args:
+    executable: /bin/bash
+  become: false
+  loop:
+    - visual-studio-code-bin
+    - cursor-bin
+    - dropbox
+    - nordpass-bin
+    - nordvpn
+    - amdgpu_top
+  tags: [desktop-apps, aur]
+
+- name: Enable Dropbox user service
+  ansible.builtin.systemd:
+    name: dropbox
+    enabled: true
+    state: started
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+  failed_when: false
+  tags: [desktop-apps, dropbox]

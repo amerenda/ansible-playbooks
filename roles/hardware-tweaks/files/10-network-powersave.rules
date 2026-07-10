@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="enp0s31f6", ATTR{power/control}="on"

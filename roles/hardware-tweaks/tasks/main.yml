@@ -1,0 +1,163 @@
+---
+# Role: hardware-tweaks
+# Machine-specific hardware configuration for the archlinux/CachyOS workstation:
+#   - audio-tweaks.service (RTC/HPET max user freq for low-latency audio)
+#   - hdmi-edid-override.service (EDID injection for TV/receiver with no DDC at boot)
+#   - keyd capslock→esc remap
+#   - udev rules: ethernet power-save disable, 8BitDo controller fixes
+
+# ── Audio tweaks ───────────────────────────────────────────────────────────────
+
+- name: Install audio-tweaks.service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Set max user frequency for RTC and HPET
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'echo 2048 > /sys/class/rtc/rtc0/max_user_freq'
+      ExecStart=/bin/sh -c 'echo 2048 > /proc/sys/dev/hpet/max-user-freq'
+      RemainAfterExit=true
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/audio-tweaks.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd daemon
+  tags: [hardware-tweaks, audio]
+
+- name: Enable audio-tweaks service
+  ansible.builtin.systemd:
+    name: audio-tweaks
+    enabled: true
+    state: started
+  tags: [hardware-tweaks, audio]
+
+# ── EDID firmware files ────────────────────────────────────────────────────────
+
+- name: Ensure /lib/firmware/edid exists
+  ansible.builtin.file:
+    path: /lib/firmware/edid
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [hardware-tweaks, edid]
+
+- name: Install TV EDID override (HDMI-A-1 — receiver with no DDC at boot)
+  ansible.builtin.copy:
+    content: "{{ edid_tv_bin | b64decode }}"
+    dest: /lib/firmware/edid/tv.bin
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hardware-tweaks, edid]
+
+- name: Install Samsung Q800T EDID
+  ansible.builtin.copy:
+    content: "{{ edid_samsung_q800t | b64decode }}"
+    dest: /lib/firmware/edid/samsung-q800t-hdmi2.1
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hardware-tweaks, edid]
+
+- name: Install Dell UP2718Q EDID
+  ansible.builtin.copy:
+    content: "{{ edid_dell_up2718q | b64decode }}"
+    dest: /lib/firmware/edid/dell-up2718q-dp
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hardware-tweaks, edid]
+
+# ── HDMI EDID override service ─────────────────────────────────────────────────
+
+- name: Install hdmi-edid-override.service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Inject EDID override for HDMI-A-1 (TV/receiver presents no DDC at boot)
+      After=sys-kernel-debug.mount systemd-udev-settle.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c '\
+        cp /lib/firmware/edid/tv.bin /sys/kernel/debug/dri/1/HDMI-A-1/edid_override && \
+        echo on > /sys/kernel/debug/dri/1/HDMI-A-1/force && \
+        echo 1 > /sys/kernel/debug/dri/1/HDMI-A-1/trigger_hotplug'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/hdmi-edid-override.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd daemon
+  tags: [hardware-tweaks, edid]
+
+- name: Enable hdmi-edid-override service
+  ansible.builtin.systemd:
+    name: hdmi-edid-override
+    enabled: true
+  tags: [hardware-tweaks, edid]
+
+# ── keyd config ────────────────────────────────────────────────────────────────
+
+- name: Ensure /etc/keyd exists
+  ansible.builtin.file:
+    path: /etc/keyd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [hardware-tweaks, keyd]
+
+- name: Install keyd default config (capslock → esc)
+  ansible.builtin.copy:
+    content: |
+      [ids]
+      *
+
+      [main]
+      capslock = esc
+    dest: /etc/keyd/default.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart keyd
+  tags: [hardware-tweaks, keyd]
+
+- name: Enable keyd service
+  ansible.builtin.systemd:
+    name: keyd
+    enabled: true
+    state: started
+  tags: [hardware-tweaks, keyd]
+
+# ── Custom udev rules ──────────────────────────────────────────────────────────
+
+- name: Install ethernet power-save disable rule
+  ansible.builtin.copy:
+    src: 10-network-powersave.rules
+    dest: /etc/udev/rules.d/10-network-powersave.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+  tags: [hardware-tweaks, udev]
+
+- name: Install 8BitDo controller udev rules
+  ansible.builtin.copy:
+    src: 98-local-8bitdo.rules
+    dest: /etc/udev/rules.d/98-local-8bitdo.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+  tags: [hardware-tweaks, udev]

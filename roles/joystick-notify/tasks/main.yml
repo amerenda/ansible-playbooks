@@ -1,0 +1,212 @@
+---
+# Role: joystick-notify
+# Controller-driven couch mode automation for KDE Plasma.
+# Sources from local joystick-notify repo on the Ansible control node.
+
+- name: Ensure /usr/local/lib/joystick-notify exists
+  ansible.builtin.file:
+    path: /usr/local/lib/joystick-notify
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [joystick-notify]
+
+# ── Scripts to /usr/local/bin/ ─────────────────────────────────────────────────
+
+- name: Install joystick-notify main scripts
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/scripts/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - monitor-switcher.sh
+    - joystick-event.sh
+    - launch-bigpicture.sh
+    - game-wrapper.sh
+    - force-desk-primary.sh
+    - couch-switch.sh
+    - check-gpu-connectors.sh
+  tags: [joystick-notify, scripts]
+
+- name: Install joystick-notify tray app
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-notify-tray.py"
+    dest: /usr/local/bin/joystick-notify-tray
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [joystick-notify, scripts]
+
+# ── Library files ──────────────────────────────────────────────────────────────
+
+- name: Install joystick-notify library shell scripts
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/lib/"
+    dest: /usr/local/lib/joystick-notify/
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  tags: [joystick-notify, lib]
+
+# ── tmpfiles.d ────────────────────────────────────────────────────────────────
+
+- name: Install tmpfiles.d for runtime directories
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/tmpfiles/joystick-notify.conf"
+    dest: /etc/tmpfiles.d/joystick-notify.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [joystick-notify, tmpfiles]
+
+- name: Apply tmpfiles.d immediately
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/joystick-notify.conf
+  changed_when: false
+  tags: [joystick-notify, tmpfiles]
+
+# ── udev rules ────────────────────────────────────────────────────────────────
+
+- name: Install joystick udev rule
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/udev/99-joystick-notify.rules"
+    dest: /etc/udev/rules.d/99-joystick-notify.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+  tags: [joystick-notify, udev]
+
+- name: Install monitor hotplug udev rule (with user substitution)
+  ansible.builtin.template:
+    src: "{{ cachyos_joystick_notify_src }}/udev/98-monitor-hotplug.rules"
+    dest: /etc/udev/rules.d/98-monitor-hotplug.rules
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    __USER__: "{{ cachyos_user }}"
+  notify: Reload udev rules
+  failed_when: false
+  tags: [joystick-notify, udev]
+
+- name: Install monitor hotplug udev rule via sed fallback
+  ansible.builtin.shell: |
+    sed "s/__USER__/{{ cachyos_user }}/g" \
+      "{{ cachyos_joystick_notify_src }}/udev/98-monitor-hotplug.rules" \
+      > /etc/udev/rules.d/98-monitor-hotplug.rules
+    chmod 0644 /etc/udev/rules.d/98-monitor-hotplug.rules
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: [joystick-notify, udev]
+
+- name: Reload udev rules
+  ansible.builtin.command: udevadm control --reload-rules
+  changed_when: false
+  tags: [joystick-notify, udev]
+
+# ── sudoers rule (DRM rescan without password) ────────────────────────────────
+
+- name: Install joystick-notify sudoers rule
+  ansible.builtin.copy:
+    content: "{{ cachyos_user }} ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --action=change /sys/class/drm/*\n"
+    dest: /etc/sudoers.d/joystick-notify
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s
+  tags: [joystick-notify, sudoers]
+
+# ── Systemd user units ────────────────────────────────────────────────────────
+
+- name: Ensure user systemd directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [joystick-notify, service]
+
+- name: Install joystick-notify user systemd units
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/systemd/{{ item }}"
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/{{ item }}"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  loop:
+    - joystick-notify.service
+    - joystick-notify-tray.service
+    - joystick-notify-steam-shutdown.service
+    - force-desk-primary.service
+  tags: [joystick-notify, service]
+
+- name: Install joystick-notify-steam-shutdown.path unit
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/systemd/joystick-notify-steam-shutdown.path"
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/joystick-notify-steam-shutdown.path"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  failed_when: false
+  tags: [joystick-notify, service]
+
+# ── Desktop entry ─────────────────────────────────────────────────────────────
+
+- name: Ensure ~/.local/share/applications exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.local/share/applications"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [joystick-notify, desktop]
+
+- name: Install tray desktop entry
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-notify-tray.desktop"
+    dest: "{{ cachyos_user_home }}/.local/share/applications/joystick-notify-tray.desktop"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  failed_when: false
+  tags: [joystick-notify, desktop]
+
+# ── Enable user services ──────────────────────────────────────────────────────
+
+- name: Reload user systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+  tags: [joystick-notify, service]
+
+- name: Enable joystick-notify user services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
+  loop:
+    - joystick-notify.service
+    - joystick-notify-steam-shutdown.path
+    - joystick-notify-tray.service
+  failed_when: false
+  tags: [joystick-notify, service]

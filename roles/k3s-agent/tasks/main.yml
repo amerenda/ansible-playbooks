@@ -1,0 +1,50 @@
+---
+# Role: k3s-agent
+# Installs k3s binary via official script, writes config.yaml, enables agent service.
+# k3s_token must be set as a hostvars fact (fetched from BWS by the fetch-secrets play).
+
+- name: Check if k3s binary is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary_stat
+  tags: [k3s-agent]
+
+- name: Install k3s via official installer (agent-only mode)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{ cachyos_k3s_version }}" \
+      INSTALL_K3S_EXEC="agent" \
+      INSTALL_K3S_SKIP_START=true \
+      sh -
+  args:
+    executable: /bin/bash
+  when: not k3s_binary_stat.stat.exists
+  tags: [k3s-agent]
+
+- name: Ensure /etc/rancher/k3s exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [k3s-agent]
+
+- name: Write k3s agent config.yaml
+  ansible.builtin.template:
+    src: k3s-agent-config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s-agent
+  tags: [k3s-agent, config]
+
+- name: Enable and start k3s-agent service
+  ansible.builtin.systemd:
+    name: k3s-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [k3s-agent, service]
