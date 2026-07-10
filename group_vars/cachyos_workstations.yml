@@ -4,6 +4,7 @@
 
 cachyos_user: alex
 cachyos_user_home: "/home/alex"
+cachyos_user_uid: 1000
 
 # ── Packages ─────────────────────────────────────────────────────────────────
 
