@@ -18,7 +18,6 @@ archlinux_workstation_pacman_packages:
   - vim
   - firefox
   - steam
-  - code
   - cryptomator
   - kubectl
   - helm
