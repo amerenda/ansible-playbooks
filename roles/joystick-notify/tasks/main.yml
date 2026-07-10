@@ -77,23 +77,9 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Reload udev rules
   tags: [joystick-notify, udev]
 
-- name: Install monitor hotplug udev rule (with user substitution)
-  ansible.builtin.template:
-    src: "{{ cachyos_joystick_notify_src }}/udev/98-monitor-hotplug.rules"
-    dest: /etc/udev/rules.d/98-monitor-hotplug.rules
-    owner: root
-    group: root
-    mode: "0644"
-  vars:
-    __USER__: "{{ cachyos_user }}"
-  notify: Reload udev rules
-  failed_when: false
-  tags: [joystick-notify, udev]
-
-- name: Install monitor hotplug udev rule via sed fallback
+- name: Install monitor hotplug udev rule (sed substitution)
   ansible.builtin.shell: |
     sed "s/__USER__/{{ cachyos_user }}/g" \
       "{{ cachyos_joystick_notify_src }}/udev/98-monitor-hotplug.rules" \
@@ -102,6 +88,7 @@
   args:
     executable: /bin/bash
   changed_when: false
+  failed_when: false
   tags: [joystick-notify, udev]
 
 - name: Reload udev rules
