@@ -13,6 +13,7 @@
           default='239d3146-6227-4e87-a56b-b417012a693c'
         )
       }}
+  tags: [arch-komodo, arch-periphery]
 
 - name: Render archlinux/komodo/compose.env from compose.env.example
   ansible.builtin.shell: |
