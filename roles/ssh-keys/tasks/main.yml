@@ -85,12 +85,10 @@
   no_log: true
   tags: [ssh-keys]
 
-- name: Write authorized_keys from alex public key
-  ansible.builtin.copy:
-    content: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_public] }}"
-    dest: "{{ cachyos_user_home }}/.ssh/authorized_keys"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0600"
+- name: Add alex public key to authorized_keys (append, not overwrite)
+  ansible.posix.authorized_key:
+    user: "{{ cachyos_user }}"
+    key: "{{ bws_ssh_map[cachyos_bws_secrets.ssh_alex_public] }}"
+    state: present
   no_log: true
   tags: [ssh-keys]
