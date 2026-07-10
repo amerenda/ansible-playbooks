@@ -1,0 +1,56 @@
+---
+# Role: kde-plasma
+# Installs KDE Plasma 6 + SDDM and enables audio/display services.
+# plasma-meta and sddm are already in cachyos_pacman_packages (installed by common role).
+
+- name: Enable SDDM display manager
+  ansible.builtin.systemd:
+    name: sddm
+    enabled: true
+    state: started
+  tags: [kde, sddm]
+
+- name: Enable avahi mDNS daemon
+  ansible.builtin.systemd:
+    name: avahi-daemon
+    enabled: true
+    state: started
+  tags: [kde, avahi]
+
+- name: Ensure /etc/sddm.conf.d exists
+  ansible.builtin.file:
+    path: /etc/sddm.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [kde, sddm]
+
+- name: Configure SDDM to use Wayland session
+  ansible.builtin.copy:
+    content: |
+      [Autologin]
+      Session=plasma.desktop
+
+      [General]
+      DisplayServer=wayland
+      GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+      [Wayland]
+      SessionDir=/usr/share/wayland-sessions
+    dest: /etc/sddm.conf.d/kde_settings.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kde, sddm, wayland]
+
+- name: Set KDE dark theme via kwriteconfig6
+  ansible.builtin.shell: |
+    kwriteconfig6 --file kdeglobals --group General --key ColorScheme BreezeDark
+    kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle Breeze
+    kwriteconfig6 --file plasmarc --group Theme --key name breeze-dark
+  become: false
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: [kde, theme]

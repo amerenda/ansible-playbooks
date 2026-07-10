@@ -1,0 +1,259 @@
+---
+# CachyOS Desktop Provisioning Playbook
+#
+# Provisions an Arch/CachyOS workstation from scratch:
+#   KDE Plasma 6, AMD GPU, Gaming, Docker, k3s agent, Komodo Periphery,
+#   Sunshine streaming, joystick-notify, SSH keys, dotfiles, restic backup.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/setup-cachyos.yml \
+#     --extra-vars "bws_access_token=<TOKEN>" \
+#     --limit archlinux
+#
+# Tags (run subsections independently):
+#   common, kde, amd-gpu, gaming, docker, desktop-apps,
+#   ssh-keys, dotfiles, sunshine, joystick-notify, k3s-agent,
+#   komodo, restic
+#
+# Hard constraints:
+#   - /mnt/storage is never touched
+#   - Never reboots — all kernel module/group changes take effect after next login
+#   - Secrets only via BWS — never hardcoded
+
+# ── Play 1: Fetch shared secrets from BWS (k3s token + komodo passkey) ─────────
+
+- name: Fetch k3s and shared secrets from BWS
+  import_playbook: fetch-secrets.yml
+
+# ── Play 2: CachyOS workstation setup ─────────────────────────────────────────
+
+- name: CachyOS workstation — packages, GPU, desktop, gaming
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/common
+      tags: [common]
+    - role: ../../roles/kde-plasma
+      tags: [kde]
+    - role: ../../roles/amd-gpu
+      tags: [amd-gpu]
+    - role: ../../roles/gaming
+      tags: [gaming]
+    - role: ../../roles/docker
+      tags: [docker]
+    - role: ../../roles/desktop-apps
+      tags: [desktop-apps]
+
+  post_tasks:
+    - name: Enable system services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: "{{ cachyos_system_services }}"
+      tags: [common, services]
+
+    - name: Enable Tailscale
+      ansible.builtin.systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+      tags: [common, tailscale]
+
+# ── Play 3: SSH keys (non-root, before dotfiles) ──────────────────────────────
+
+- name: CachyOS — write SSH keys from BWS
+  hosts: cachyos_workstations
+  become: false
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  pre_tasks:
+    - name: Assert bws_access_token is set
+      ansible.builtin.assert:
+        that:
+          - bws_access_token is defined
+          - bws_access_token | length > 0
+        fail_msg: "Pass --extra-vars 'bws_access_token=<TOKEN>'"
+
+  roles:
+    - role: ../../roles/ssh-keys
+      tags: [ssh-keys]
+
+# ── Play 4: Dotfiles (non-root, after SSH keys) ───────────────────────────────
+
+- name: CachyOS — clone dotfiles and run dotbot
+  hosts: cachyos_workstations
+  become: false
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/dotfiles
+      tags: [dotfiles]
+
+# ── Play 5: Hardware tweaks (audio, EDID, keyd, udev) ────────────────────────
+
+- name: CachyOS — hardware tweaks
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/hardware-tweaks
+      tags: [hardware-tweaks]
+
+# ── Play 6: MoonDeckBuddy ─────────────────────────────────────────────────────
+
+- name: CachyOS — MoonDeckBuddy
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/moondeck
+      tags: [moondeck]
+
+# ── Play 7: Sunshine streaming (user service + scripts) ───────────────────────
+
+- name: CachyOS — Sunshine streaming server
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/sunshine
+      tags: [sunshine]
+
+# ── Play 8: joystick-notify (controller couch-mode automation) ────────────────
+
+- name: CachyOS — joystick-notify
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/joystick-notify
+      tags: [joystick-notify]
+
+# ── Play 9: k3s agent ─────────────────────────────────────────────────────────
+
+- name: CachyOS — k3s agent join
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/k3s-agent
+      tags: [k3s-agent]
+
+# ── Play 10: Komodo Periphery ─────────────────────────────────────────────────
+
+- name: Bootstrap Komodo Periphery on CachyOS
+  import_playbook: setup-archlinux-komodo.yml
+
+# ── Play 11: Restic backup (runs after dotfiles provides the timer/service files)
+
+- name: CachyOS — restic backup timer
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/restic
+      tags: [restic]
+
+# ── Play 12: Final summary ────────────────────────────────────────────────────
+
+- name: CachyOS provisioning summary
+  hosts: cachyos_workstations
+  become: false
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  tasks:
+    - name: Verify key packages are installed
+      ansible.builtin.command: pacman -Q {{ item }}
+      loop:
+        - firefox
+        - steam
+        - docker
+        - alacritty
+        - zsh
+        - restic
+      register: pkg_checks
+      changed_when: false
+      failed_when: false
+      tags: [summary]
+
+    - name: Verify k3s agent is active
+      ansible.builtin.command: systemctl is-active k3s-agent
+      register: k3s_check
+      changed_when: false
+      failed_when: false
+      tags: [summary]
+
+    - name: Verify Komodo Periphery is active
+      ansible.builtin.command: systemctl is-active komodo-periphery
+      register: komodo_check
+      changed_when: false
+      failed_when: false
+      tags: [summary]
+
+    - name: Verify SSH keys exist
+      ansible.builtin.stat:
+        path: "{{ cachyos_user_home }}/.ssh/{{ item }}"
+      loop:
+        - alex_id_ed25519
+        - github
+      register: ssh_checks
+      tags: [summary]
+
+    - name: Print summary
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════
+          CachyOS Provisioning Summary — {{ inventory_hostname }}
+          ════════════════════════════════════════════════════
+
+          Packages:
+          {% for result in pkg_checks.results %}
+          - {{ result.item }}: {{ 'OK' if result.rc == 0 else 'MISSING' }}
+          {% endfor %}
+
+          Services:
+          - k3s-agent: {{ k3s_check.stdout | default('unknown') }}
+          - komodo-periphery: {{ komodo_check.stdout | default('unknown') }}
+
+          SSH keys:
+          {% for stat in ssh_checks.results %}
+          - ~/.ssh/{{ stat.item }}: {{ 'EXISTS' if stat.stat.exists else 'MISSING' }}
+          {% endfor %}
+
+          Dotfiles: {{ cachyos_dotfiles_dest }}
+          Sunshine: http://localhost:47990 (web UI)
+          Komodo Periphery: https://{{ archlinux_ip | default(ansible_host) }}:8120
+
+          Note: group changes (docker, video, render) take effect after next login.
+          ════════════════════════════════════════════════════
+      tags: [summary]

@@ -1,0 +1,41 @@
+# Sunshine configuration — AMD Radeon RX 9070 XT (gfx1201/RDNA 4)
+# Managed by Ansible. Manual edits will be overwritten.
+
+# ── Encoding ───────────────────────────────────────────────
+
+# VA-API is the primary encoder for AMD GPUs on Linux.
+encoder = vaapi
+
+# HEVC (H.265) mode: 2 = SDR, 3 = HDR (advertises both Main + Main10).
+hevc_mode = 2
+
+# AV1: 1 = disabled (higher latency, better compression — enable for slow-paced games)
+av1_mode = 1
+
+# ── Capture ────────────────────────────────────────────────
+
+# kwin uses KDE's screencast API (lowest overhead on Plasma Wayland).
+capture = kwin
+
+# ── Bitrate & Quality ────────────────────────────────────
+
+max_bitrate = 0
+bitrate = 25000
+rc_mode = cbr
+keyint = 2
+fec_percentage = 20
+
+# ── Performance ───────────────────────────────────────────
+
+minimum_fps_target = 0
+min_threads = 4
+
+# ── Logging ───────────────────────────────────────────────
+
+log_path = /tmp/sunshine.log
+min_log_level = 3
+
+# ── Audio ─────────────────────────────────────────────────
+
+audio_sample_rate = 48000
+audio_channels = 2

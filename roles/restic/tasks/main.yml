@@ -1,0 +1,55 @@
+---
+# Role: restic
+# Installs restic and sets up the backup systemd timer from dotfiles.
+# restic package is already in cachyos_pacman_packages.
+# Backup script at /usr/local/sbin/backup.sh is sourced from dotfiles/scripts/backup.sh.
+
+- name: Install restic backup systemd service
+  ansible.builtin.copy:
+    src: "{{ cachyos_dotfiles_dest }}/scripts/meta/backup/backup.service"
+    dest: /etc/systemd/system/backup.service
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  failed_when: false
+  tags: [restic, service]
+
+- name: Install restic backup systemd timer
+  ansible.builtin.copy:
+    src: "{{ cachyos_dotfiles_dest }}/scripts/meta/backup/backup.timer"
+    dest: /etc/systemd/system/backup.timer
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  failed_when: false
+  tags: [restic, service]
+
+- name: Ensure /usr/local/sbin exists
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [restic]
+
+- name: Symlink backup script to /usr/local/sbin/backup.sh
+  ansible.builtin.file:
+    src: "{{ cachyos_user_home }}/.scripts/backup.sh"
+    dest: /usr/local/sbin/backup.sh
+    state: link
+    owner: root
+    group: root
+  failed_when: false
+  tags: [restic]
+
+- name: Enable restic backup timer
+  ansible.builtin.systemd:
+    name: backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  failed_when: false
+  tags: [restic, service]

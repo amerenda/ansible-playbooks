@@ -1,0 +1,23 @@
+# k3s Agent Configuration
+# Managed by Ansible (roles/k3s-agent) — manual edits will be overwritten.
+
+server: "{{ cachyos_k3s_server }}"
+token: "{{ hostvars['localhost']['k3s_token'] }}"
+
+node-name: "{{ cachyos_k3s_node_name }}"
+node-ip: "{{ cachyos_k3s_node_ip }}"
+
+data-dir: "/var/lib/rancher/k3s"
+log: "/var/log/k3s-agent.log"
+
+kubelet-arg:
+  - "max-pods=110"
+  - "kube-reserved=cpu=50m,memory=128Mi"
+  - "system-reserved=cpu=50m,memory=128Mi"
+  - "eviction-hard=memory.available<100Mi"
+  - "eviction-soft=memory.available<200Mi"
+  - "eviction-soft-grace-period=memory.available=2m"
+
+node-label:
+  - "longhorn.io/storage=true"
+  - "longhorn-storage=true"

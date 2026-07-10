@@ -1,0 +1,81 @@
+---
+# Role: moondeck
+# MoonDeckBuddy — adds Steam Deck-like streaming features to Moonlight.
+# Downloads AppImage from GitHub releases (too large for git at ~33MB).
+# MoonDeckStream is a symlink to the same AppImage (alternate launch mode).
+#
+# Version is set in cachyos_workstations group_vars (moondeck_version).
+
+- name: Ensure /opt/moondeck exists
+  ansible.builtin.file:
+    path: /opt/moondeck
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  tags: [moondeck]
+
+- name: Check if MoonDeckBuddy AppImage already present
+  ansible.builtin.stat:
+    path: "/opt/moondeck/MoonDeckBuddy-{{ moondeck_version }}-x86_64.AppImage"
+  register: moondeck_appimage_stat
+  tags: [moondeck]
+
+- name: Download MoonDeckBuddy AppImage from GitHub releases
+  ansible.builtin.get_url:
+    url: "https://github.com/FrogTheFrog/moondeck-buddy/releases/download/v{{ moondeck_version }}/MoonDeckBuddy-{{ moondeck_version }}-x86_64.AppImage"
+    dest: "/opt/moondeck/MoonDeckBuddy-{{ moondeck_version }}-x86_64.AppImage"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  when: not moondeck_appimage_stat.stat.exists
+  tags: [moondeck]
+
+- name: Symlink MoonDeckBuddy.AppImage → versioned AppImage
+  ansible.builtin.file:
+    src: "MoonDeckBuddy-{{ moondeck_version }}-x86_64.AppImage"
+    dest: /opt/moondeck/MoonDeckBuddy.AppImage
+    state: link
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  tags: [moondeck]
+
+- name: Symlink MoonDeckBuddy → MoonDeckBuddy.AppImage
+  ansible.builtin.file:
+    src: MoonDeckBuddy.AppImage
+    dest: /opt/moondeck/MoonDeckBuddy
+    state: link
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  tags: [moondeck]
+
+- name: Symlink MoonDeckStream → MoonDeckBuddy.AppImage (alternate launch used by Sunshine)
+  ansible.builtin.file:
+    src: MoonDeckBuddy.AppImage
+    dest: /opt/moondeck/MoonDeckStream
+    state: link
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  tags: [moondeck]
+
+- name: Install gamescope.sh wrapper
+  ansible.builtin.copy:
+    content: |
+      #!/bin/bash
+      MONITOR="HDMI-A-1"   # dummy
+      exec gamescope -O "$MONITOR" -- "$@"
+    dest: /opt/moondeck/gamescope.sh
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  tags: [moondeck]
+
+- name: Add /opt/moondeck to system PATH
+  ansible.builtin.copy:
+    content: |
+      PATH="/opt/moondeck:$PATH"
+    dest: /etc/profile.d/moondeck.sh
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [moondeck]

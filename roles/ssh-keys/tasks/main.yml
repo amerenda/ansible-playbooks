@@ -1,0 +1,96 @@
+---
+# Role: ssh-keys
+# Fetches SSH keys from BWS and writes them to ~/.ssh/.
+# Runs as non-root (become: false at play level).
+#
+# Key layout on disk:
+#   ~/.ssh/alex_id_ed25519      — main identity key (mode 0600)
+#   ~/.ssh/alex_id_ed25519.pub  — main identity public key (mode 0644)
+#   ~/.ssh/github               — GitHub SSH key (mode 0600)
+#   ~/.ssh/github.pub           — GitHub SSH public key (mode 0644)
+#
+# The dotfiles role later runs dotbot which symlinks ~/.ssh → ~/projects/dotfiles/ssh/.
+# After dotbot runs, these files will need to exist in ~/projects/dotfiles/ssh/ instead.
+# That copying is handled in the dotfiles role after the repo is cloned.
+
+- name: Ensure ~/.ssh exists with correct permissions
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.ssh"
+    state: directory
+    mode: "0700"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  tags: [ssh-keys]
+
+# Fetch each key from BWS on the control node (localhost), then push to target.
+# bws_access_token is passed as extra-var at playbook invocation.
+
+- name: Fetch alex main private key from BWS
+  ansible.builtin.command: >-
+    bws secret list --access-token {{ bws_access_token }} --output json
+  register: bws_all_secrets_raw
+  delegate_to: localhost
+  changed_when: false
+  no_log: true
+  run_once: true
+  tags: [ssh-keys]
+
+- name: Parse SSH secrets from BWS response
+  ansible.builtin.set_fact:
+    bws_ssh_map: >-
+      {{ bws_all_secrets_raw.stdout | from_json
+         | items2dict(key_name='key', value_name='value') }}
+  delegate_to: localhost
+  no_log: true
+  run_once: true
+  tags: [ssh-keys]
+
+- name: Write alex main private key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_private] }}"
+    dest: "{{ cachyos_user_home }}/.ssh/alex_id_ed25519"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0600"
+  no_log: true
+  tags: [ssh-keys]
+
+- name: Write alex main public key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_public] }}"
+    dest: "{{ cachyos_user_home }}/.ssh/alex_id_ed25519.pub"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  no_log: true
+  tags: [ssh-keys]
+
+- name: Write GitHub private key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_github_private] }}"
+    dest: "{{ cachyos_user_home }}/.ssh/github"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0600"
+  no_log: true
+  tags: [ssh-keys]
+
+- name: Write GitHub public key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_github_public] }}"
+    dest: "{{ cachyos_user_home }}/.ssh/github.pub"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  no_log: true
+  tags: [ssh-keys]
+
+- name: Write authorized_keys from alex public key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost']['bws_ssh_map'][cachyos_bws_secrets.ssh_alex_public] }}"
+    dest: "{{ cachyos_user_home }}/.ssh/authorized_keys"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0600"
+  no_log: true
+  tags: [ssh-keys]

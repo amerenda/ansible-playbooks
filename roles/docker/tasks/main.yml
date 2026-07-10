@@ -1,0 +1,57 @@
+---
+# Role: docker
+# Docker CE, docker group, daemon.json with DNS pinning.
+# docker + docker-compose + docker-buildx already in cachyos_pacman_packages.
+
+- name: Enable Docker daemon
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+  tags: [docker]
+
+- name: Add user to docker group
+  ansible.builtin.user:
+    name: "{{ cachyos_user }}"
+    groups:
+      - docker
+    append: true
+  tags: [docker, groups]
+
+- name: Ensure /etc/docker exists
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [docker]
+
+- name: Read existing daemon.json
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: existing_daemon_json
+  failed_when: false
+  tags: [docker]
+
+- name: Merge DNS into daemon.json
+  ansible.builtin.copy:
+    content: "{{ (existing_daemon_json.content | default('e30=') | b64decode | from_json) | combine({'dns': ['10.100.20.240', '1.1.1.1']}) | to_nice_json }}\n"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  register: daemon_json_updated
+  tags: [docker]
+
+- name: Restart Docker when daemon.json changed
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when: daemon_json_updated.changed
+  tags: [docker]
+
+- name: Align docker group GID for ARC k3s runners (matches Debian murderbot GID 989)
+  ansible.builtin.import_tasks: ../../tasks/archlinux-arc-docker-gid.yml
+  when: inventory_hostname in (groups['archlinux_k3s'] | default([]))
+  tags: [docker, arc-gid]

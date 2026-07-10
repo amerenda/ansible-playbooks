@@ -1,0 +1,109 @@
+---
+# Role: dotfiles
+# Clones github.com/amerenda/dotfiles and runs dotbot.
+#
+# Dotbot links ~/.ssh → ~/projects/dotfiles/ssh/, so after this role runs:
+# - SSH keys that were written to ~/.ssh/ by the ssh-keys role will be REPLACED by the symlink
+# - We copy the keys into ~/projects/dotfiles/ssh/ BEFORE running dotbot so they survive
+
+- name: Ensure ~/projects directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/projects"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  tags: [dotfiles]
+
+- name: Check if dotfiles repo already cloned
+  ansible.builtin.stat:
+    path: "{{ cachyos_dotfiles_dest }}/.git"
+  register: dotfiles_git_stat
+  tags: [dotfiles]
+
+- name: Clone dotfiles repo via SSH (requires github key in ~/.ssh/)
+  ansible.builtin.git:
+    repo: "{{ cachyos_dotfiles_repo }}"
+    dest: "{{ cachyos_dotfiles_dest }}"
+    version: master
+    key_file: "{{ cachyos_user_home }}/.ssh/github"
+    accept_hostkey: true
+  become: false
+  when: not dotfiles_git_stat.stat.exists
+  environment:
+    GIT_SSH_COMMAND: "ssh -i {{ cachyos_user_home }}/.ssh/github -o StrictHostKeyChecking=no"
+  tags: [dotfiles]
+
+- name: Pull latest dotfiles
+  ansible.builtin.shell: |
+    git -C {{ cachyos_dotfiles_dest }} pull --ff-only
+  become: false
+  changed_when: false
+  when: dotfiles_git_stat.stat.exists
+  tags: [dotfiles]
+
+# Copy SSH keys into dotfiles/ssh/ BEFORE dotbot runs (dotbot will symlink ~/.ssh → dotfiles/ssh/)
+- name: Ensure dotfiles/ssh directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_dotfiles_dest }}/ssh"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0700"
+  become: false
+  tags: [dotfiles, ssh-keys]
+
+- name: Copy SSH keys into dotfiles/ssh/ (survives dotbot symlink replacement)
+  ansible.builtin.copy:
+    src: "{{ cachyos_user_home }}/.ssh/{{ item.name }}"
+    dest: "{{ cachyos_dotfiles_dest }}/ssh/{{ item.name }}"
+    remote_src: true
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "{{ item.mode }}"
+  become: false
+  no_log: "{{ item.private | default(false) }}"
+  loop:
+    - { name: "alex_id_ed25519",     mode: "0600", private: true }
+    - { name: "alex_id_ed25519.pub", mode: "0644", private: false }
+    - { name: "github",              mode: "0600", private: true }
+    - { name: "github.pub",          mode: "0644", private: false }
+    - { name: "authorized_keys",     mode: "0600", private: false }
+  failed_when: false
+  tags: [dotfiles, ssh-keys]
+
+# Install dotbot if not already available via pip
+- name: Check if dotbot is available
+  ansible.builtin.command: which dotbot
+  register: dotbot_check
+  changed_when: false
+  failed_when: false
+  become: false
+  tags: [dotfiles]
+
+- name: Install dotbot via pip
+  ansible.builtin.pip:
+    name: dotbot
+    state: present
+    extra_args: --user
+  become: false
+  when: dotbot_check.rc != 0
+  tags: [dotfiles]
+
+- name: Run dotbot
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd {{ cachyos_dotfiles_dest }}
+    git submodule update --init --recursive
+    python3 -m dotbot -c install.conf.yaml
+  become: false
+  args:
+    executable: /bin/bash
+  register: dotbot_result
+  changed_when: true
+  tags: [dotfiles]
+
+- name: Show dotbot output
+  ansible.builtin.debug:
+    msg: "{{ dotbot_result.stdout_lines[-20:] }}"
+  tags: [dotfiles]

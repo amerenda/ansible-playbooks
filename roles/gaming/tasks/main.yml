@@ -1,0 +1,44 @@
+---
+# Role: gaming
+# Steam, Proton-GE (AUR), Lutris, GameMode, MangoHud — all from cachyos_pacman_packages
+# and cachyos_aur_packages (installed by common / desktop-apps roles).
+# This role installs AUR gaming packages and sets up GameMode.
+
+- name: Install AUR gaming packages
+  ansible.builtin.shell: |
+    set -euo pipefail
+    paru -S --noconfirm --needed {{ item }}
+  args:
+    executable: /bin/bash
+  become: false
+  loop:
+    - proton-ge-custom-bin
+    - game-devices-udev
+  tags: [gaming, aur]
+
+- name: Add user to gamemode group
+  ansible.builtin.user:
+    name: "{{ cachyos_user }}"
+    groups:
+      - gamemode
+    append: true
+  failed_when: false
+  tags: [gaming, groups]
+
+- name: Enable GameMode daemon
+  ansible.builtin.systemd:
+    name: gamemoded
+    enabled: true
+    state: started
+  failed_when: false
+  tags: [gaming, gamemode]
+
+- name: Configure Steam to use Proton-GE by default
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.steam"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [gaming, steam]
