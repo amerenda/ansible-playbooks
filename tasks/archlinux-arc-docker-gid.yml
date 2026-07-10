@@ -19,7 +19,7 @@
   changed_when: false
   failed_when: arc_getent_docker.rc != 0
 
-- name: Fail if target GID is reserved by another group
+- name: Check whether target GID is reserved by another group
   ansible.builtin.shell: |
     set -euo pipefail
     line=$(getent group "{{ arc_runner_docker_socket_gid_effective }}" || true)
@@ -30,13 +30,34 @@
     exit 1
   args:
     executable: /bin/bash
+  register: arc_gid_conflict_check
   changed_when: false
+  failed_when: false
+
+# Policy: prefer the host's standard/native GID assignment over forcing a non-standard
+# remap. Only align docker's GID to match ARC's supplementalGroups when that GID is free
+# (or already docker's) on this host. Where it's already claimed by something else with a
+# real purpose (e.g. `render` on a GPU workstation — reassigning it would break GPU device
+# access for anything using that group), skip and warn instead of forcing the conflict.
+# ARC runner pods needing docker.sock on a host where this got skipped will need a
+# different mechanism (e.g. a per-node supplementalGroups override in k3s-dean-gitops)
+# rather than remapping a GID that's already spoken for.
+- name: Warn and skip GID alignment when target GID is already claimed by another group
+  ansible.builtin.debug:
+    msg: |
+      Skipping ARC docker-GID alignment: {{ arc_gid_conflict_check.stderr }}
+      Keeping docker's native GID (standard, non-invasive) rather than forcing a conflict.
+      ARC runner pods on this host that need docker.sock via
+      supplementalGroups: [{{ arc_runner_docker_socket_gid_effective }}] will not have
+      access until this is resolved some other way.
+  when: arc_gid_conflict_check.rc != 0
 
 - name: Set docker group GID to match ARC runner supplementalGroups
   ansible.builtin.group:
     name: docker
     gid: "{{ arc_runner_docker_socket_gid_effective }}"
   register: arc_docker_group_gid_task
+  when: arc_gid_conflict_check.rc == 0
 
 - name: Restart Docker after docker group GID change
   ansible.builtin.systemd:

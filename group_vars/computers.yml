@@ -46,6 +46,7 @@ archlinux_workstation_pacman_packages:
   - yubikey-manager
   - docker-buildx
   - bitwarden
+  - nordvpn
   # bitwarden-cli intentionally excluded: current repo version hard-depends on the specific
   # `nodejs-lts-jod` package, which conflicts with plain `nodejs` (already installed on
   # archlinux for other dev tooling — they can't coexist, same file ownership). Verified by
@@ -58,14 +59,11 @@ archlinux_workstation_aur_packages:
   - cursor-bin
   - dropbox
   - visual-studio-code-bin
-  # nordvpn-bin intentionally excluded for now — conflicts with `nordvpn` (official repo
-  # package, community/extra), which is what's actually installed and running
-  # (nordvpnd.service) on archlinux today. Needs a decision: keep official `nordvpn`
-  # (drop this AUR entry for good) or migrate to `nordvpn-bin` (this entry stays, but
-  # requires removing the official package first — a real client switch, not a no-op).
-  # Verified by actually attempting the install: "nordvpn-bin-5.2.0-1 and nordvpn-3.17.0-1
-  # are in conflict."
-  # - nordvpn-bin
+  # No nordvpn-bin here (decision: keep official nordvpn). It conflicts with `nordvpn`
+  # (official repo package, community/extra) — verified by actually attempting the install:
+  # "nordvpn-bin-5.2.0-1 and nordvpn-3.17.0-1 are in conflict." nordvpn is what's actually
+  # installed and running (nordvpnd.service) on archlinux; add it to
+  # archlinux_workstation_pacman_packages below if it ever needs to be ansible-managed.
   - nordpass-bin
   - kubectx
   - d2-bin
@@ -85,6 +83,7 @@ archlinux_workstation_verify_commands:
   - terraform
   - bws
   - bitwarden
+  - nordvpn
 
 compose_repo: "git@github.com:amerenda/komodo-dean-gitops.git"
 bws_version: "2.0.0"
