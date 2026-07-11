@@ -8,7 +8,7 @@
 # Usage:
 #   ansible-playbook -i inventory/inventory.ini \
 #     playbooks/infrastructure/setup-cachyos.yml \
-#     --extra-vars "bws_access_token=<TOKEN>" \
+#     --extra-vars "bws_access_token=$BWS_RO_TOKEN" \
 #     --limit "archlinux,localhost"
 #
 # NOTE: --limit must include 'localhost' because fetch-secrets.yml runs on
@@ -83,7 +83,7 @@
         that:
           - bws_access_token is defined
           - bws_access_token | length > 0
-        fail_msg: "Pass --extra-vars 'bws_access_token=<TOKEN>'"
+        fail_msg: "Pass --extra-vars 'bws_access_token=$BWS_RO_TOKEN'"
 
   roles:
     - role: ../../roles/ssh-keys
