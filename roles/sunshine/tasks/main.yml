@@ -128,7 +128,9 @@
 
 - name: Enable and start sunshine user service
   ansible.builtin.systemd:
-    name: sunshine.service
+    # The AUR sunshine package ships app-dev.lizardbyte.app.Sunshine.service, not
+    # sunshine.service — verified via `pacman -Ql sunshine | grep systemd`.
+    name: app-dev.lizardbyte.app.Sunshine.service
     enabled: true
     state: started
     scope: user
