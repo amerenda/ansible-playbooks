@@ -2,6 +2,29 @@
 # Role: common
 # Sets locale, timezone, default shell, multilib repo, base packages, and paru AUR helper.
 
+# ── Sudo bootstrap (fresh install only) ─────────────────────────────────────────
+# A fresh CachyOS/Arch install has no passwordless sudo for the user — every other
+# become:true task in this whole playbook (and makepkg -si for paru/AUR packages,
+# further down in this same role) needs one. This is the one task in the entire
+# playbook that requires an actual sudo password:
+#
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-cachyos.yml \
+#     --extra-vars "bws_access_token=<TOKEN>" --limit "archlinux,localhost" \
+#     --tags sudo-bootstrap --ask-become-pass
+#
+# Run that once (interactively enter the sudo password when prompted). Every
+# subsequent run — including after a full re-wipe, once this task has run once
+# on that fresh install — needs no password at all.
+- name: Write NOPASSWD sudoers rule for the ansible user
+  ansible.builtin.copy:
+    content: "{{ cachyos_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    dest: "/etc/sudoers.d/{{ cachyos_user }}-ansible-bootstrap"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+  tags: [common, sudo-bootstrap]
+
 - name: Set timezone
   community.general.timezone:
     name: "{{ timezone | default('America/New_York') }}"
@@ -43,7 +66,9 @@
   args:
     executable: /bin/bash
   register: multilib_result
-  changed_when: "'enabled' in multilib_result.stdout"
+  # NOT a plain 'enabled' in stdout substring check — "already_enabled" also contains
+  # "enabled" as a substring, which made this always report changed.
+  changed_when: multilib_result.stdout | trim == 'enabled'
   tags: [common, multilib, pacman]
 
 - name: Update pacman package cache
