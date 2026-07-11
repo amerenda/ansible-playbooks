@@ -1,0 +1,21 @@
+[Unit]
+Description=Switch power-profiles-daemon profile based on Wayland idle state
+Documentation=https://github.com/swaywm/swayidle
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Set a known-good starting profile on every (re)start — a fresh boot or service restart
+# both count as "in use". Must happen here, not from an ansible task: power-profiles-daemon's
+# polkit policy only authorizes calls from the real active graphical session: an SSH-spawned
+# task (even as the same user) is a different session and gets AccessDenied.
+ExecStartPre=/usr/bin/powerprofilesctl set {{ cachyos_power_active_profile }}
+ExecStart=/usr/bin/swayidle -w \
+  timeout {{ cachyos_power_idle_timeout_seconds }} '/usr/bin/powerprofilesctl set {{ cachyos_power_idle_profile }}' \
+  resume '/usr/bin/powerprofilesctl set {{ cachyos_power_active_profile }}'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
+Alias=idle-power-profile.service

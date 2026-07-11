@@ -1,0 +1,97 @@
+---
+# Role: power-profiles
+# Idle-based power-profiles-daemon switching: performance while in use, power-saver when
+# idle. power-profiles-daemon itself has no idle detection (confirmed — it only exposes
+# manual/app-requested profile switching), so this pairs it with swayidle, a small daemon
+# that uses the standard Wayland ext-idle-notify-v1 protocol (which KWin implements) to run
+# a command on idle timeout and another on resume. Runs as a user service so
+# power-profiles-daemon's polkit check (which requires an authenticated active local
+# session, not just root) passes — a root/system-level caller is denied.
+
+- name: Ensure power-profiles-daemon and swayidle are installed
+  community.general.pacman:
+    name:
+      - power-profiles-daemon
+      - swayidle
+    state: present
+  tags: [power-profiles, packages]
+
+- name: Enable and start power-profiles-daemon system service
+  # Was previously active but NOT enabled — installed/started manually at some point,
+  # would not have survived a reboot.
+  ansible.builtin.systemd:
+    name: power-profiles-daemon
+    enabled: true
+    state: started
+  tags: [power-profiles, service]
+
+- name: Ensure user systemd directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [power-profiles, service]
+
+- name: Install idle-power-profile user systemd service
+  ansible.builtin.template:
+    src: idle-power-profile.service.j2
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/idle-power-profile.service"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  register: idle_power_profile_unit
+  tags: [power-profiles, service]
+
+- name: Enable user lingering so systemd user instance runs without active login
+  ansible.builtin.command: loginctl enable-linger {{ cachyos_user }}
+  changed_when: false
+  tags: [power-profiles, service]
+
+- name: Wait for user systemd bus socket
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ cachyos_user_uid }}/bus"
+    timeout: 10
+  become: false
+  tags: [power-profiles, service]
+
+- name: Reload user systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  when: idle_power_profile_unit.changed
+  tags: [power-profiles, service]
+
+- name: Enable and start idle-power-profile user service
+  ansible.builtin.systemd:
+    name: idle-power-profile.service
+    enabled: true
+    state: started
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [power-profiles, service]
+
+# "state: started" above won't restart an already-running service just because the unit
+# file content changed underneath it — restart explicitly so ExecStartPre (which sets the
+# known-good starting profile) actually re-runs, and any timeout/profile var change applies.
+- name: Restart idle-power-profile user service if the unit file changed
+  ansible.builtin.systemd:
+    name: idle-power-profile.service
+    state: restarted
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  when: idle_power_profile_unit.changed
+  tags: [power-profiles, service]

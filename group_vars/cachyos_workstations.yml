@@ -181,6 +181,15 @@ cachyos_rocm_gfx_override: "11.0.0"
 
 moondeck_version: "1.9.0"
 
+# ── Power profiles (idle → power-saver, active → performance) ─────────────────
+# power-profiles-daemon has no idle detection of its own — paired with swayidle
+# (standard Wayland ext-idle-notify-v1 protocol, works with KWin) via the
+# power-profiles role.
+
+cachyos_power_idle_timeout_seconds: 300
+cachyos_power_active_profile: performance
+cachyos_power_idle_profile: power-saver
+
 # ── BWS secret names for SSH keys ─────────────────────────────────────────────
 
 cachyos_bws_secrets:
