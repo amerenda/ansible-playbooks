@@ -281,6 +281,7 @@
           - k3s-agent: {{ k3s_check.stdout | default('unknown') }}
           - komodo-periphery: {{ komodo_check.stdout | default('unknown') }}
           - idle-power-profile: {{ power_profile_check.stdout | default('unknown') }} (current profile: {{ power_profile_current.stdout | default('unknown') }})
+            switch log: ~/.local/state/power-profile-switch.log
 
           SSH keys:
           {% for stat in ssh_checks.results %}

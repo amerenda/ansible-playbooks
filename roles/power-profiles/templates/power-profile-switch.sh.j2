@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Wraps `powerprofilesctl set` with a timestamped log line, so profile switches
+# triggered by idle-power-profile.service (swayidle timeout/resume) are visible
+# somewhere other than "trust me it happened". NOTE: verified this does NOT
+# reliably show up in `journalctl --user -u idle-power-profile.service` — swayidle's
+# spawned timeout/resume subprocess output isn't captured there the way ExecStart's
+# own output is. The log file below is the source of truth; don't rely on the journal.
+set -euo pipefail
+
+PROFILE="${1:?Usage: $0 <profile> [reason]}"
+REASON="${2:-manual}"
+LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/power-profile-switch.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+if powerprofilesctl set "$PROFILE"; then
+    printf '%s switched to %-12s (reason: %s)\n' "$(date -Is)" "$PROFILE" "$REASON" | tee -a "$LOG_FILE"
+else
+    printf '%s FAILED to switch to %-12s (reason: %s)\n' "$(date -Is)" "$PROFILE" "$REASON" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi

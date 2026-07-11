@@ -25,6 +25,15 @@
     state: started
   tags: [power-profiles, service]
 
+- name: Install power-profile-switch.sh wrapper (logs every switch)
+  ansible.builtin.template:
+    src: power-profile-switch.sh.j2
+    dest: /usr/local/bin/power-profile-switch.sh
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [power-profiles, service]
+
 - name: Ensure user systemd directory exists
   ansible.builtin.file:
     path: "{{ cachyos_user_home }}/.config/systemd/user"

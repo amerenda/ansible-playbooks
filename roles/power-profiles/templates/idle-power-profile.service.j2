@@ -9,10 +9,10 @@ Type=simple
 # both count as "in use". Must happen here, not from an ansible task: power-profiles-daemon's
 # polkit policy only authorizes calls from the real active graphical session: an SSH-spawned
 # task (even as the same user) is a different session and gets AccessDenied.
-ExecStartPre=/usr/bin/powerprofilesctl set {{ cachyos_power_active_profile }}
+ExecStartPre=/usr/local/bin/power-profile-switch.sh {{ cachyos_power_active_profile }} service-start
 ExecStart=/usr/bin/swayidle -w \
-  timeout {{ cachyos_power_idle_timeout_seconds }} '/usr/bin/powerprofilesctl set {{ cachyos_power_idle_profile }}' \
-  resume '/usr/bin/powerprofilesctl set {{ cachyos_power_active_profile }}'
+  timeout {{ cachyos_power_idle_timeout_seconds }} '/usr/local/bin/power-profile-switch.sh {{ cachyos_power_idle_profile }} idle-timeout' \
+  resume '/usr/local/bin/power-profile-switch.sh {{ cachyos_power_active_profile }} resume'
 Restart=on-failure
 RestartSec=5
 
