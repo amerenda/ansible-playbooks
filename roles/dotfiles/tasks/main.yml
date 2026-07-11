@@ -25,7 +25,7 @@
   ansible.builtin.git:
     repo: "{{ cachyos_dotfiles_repo }}"
     dest: "{{ cachyos_dotfiles_dest }}"
-    version: master
+    version: main
     key_file: "{{ cachyos_user_home }}/.ssh/github"
     accept_hostkey: true
   become: false

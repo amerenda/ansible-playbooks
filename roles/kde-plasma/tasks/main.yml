@@ -3,11 +3,24 @@
 # Installs KDE Plasma 6 + SDDM and enables audio/display services.
 # plasma-meta and sddm are already in cachyos_pacman_packages (installed by common role).
 
-- name: Enable SDDM display manager
+# CachyOS ships its own display manager, plasma-login-manager (plasmalogin.service), enabled
+# by default instead of sddm.service — they both want to own
+# /etc/systemd/system/display-manager.service, so forcing sddm on top of an already-working
+# plasmalogin fails ("File ... already exists and is a symlink to ... plasmalogin.service").
+# Converge instead of fight the distro default: only enable sddm as a fallback if no display
+# manager is enabled yet; leave an already-working one (plasmalogin or otherwise) alone.
+- name: Check which display manager is currently enabled
+  ansible.builtin.stat:
+    path: /etc/systemd/system/display-manager.service
+  register: cachyos_display_manager_link
+  tags: [kde, sddm]
+
+- name: Enable SDDM display manager (only if no display manager is enabled yet)
   ansible.builtin.systemd:
     name: sddm
     enabled: true
     state: started
+  when: not cachyos_display_manager_link.stat.exists
   tags: [kde, sddm]
 
 - name: Enable avahi mDNS daemon
