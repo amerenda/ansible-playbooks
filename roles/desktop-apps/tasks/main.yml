@@ -10,6 +10,8 @@
   args:
     executable: /bin/bash
   become: false
+  register: desktop_apps_aur_result
+  changed_when: "'there is nothing to do' not in desktop_apps_aur_result.stdout"
   loop: "{{ cachyos_aur_packages }}"
   tags: [desktop-apps, aur]
 

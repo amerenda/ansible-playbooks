@@ -11,6 +11,8 @@
   args:
     executable: /bin/bash
   become: false
+  register: gaming_aur_result
+  changed_when: "'there is nothing to do' not in gaming_aur_result.stdout"
   loop:
     - proton-ge-custom-bin
     - game-devices-udev

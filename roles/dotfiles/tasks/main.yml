@@ -170,7 +170,7 @@
   args:
     executable: /bin/bash
   register: dotbot_result
-  changed_when: true
+  changed_when: "'Creating symlink' in dotbot_result.stdout or 'Creating directory' in dotbot_result.stdout"
   tags: [dotfiles]
 
 - name: Show dotbot output

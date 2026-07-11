@@ -20,6 +20,8 @@
   args:
     executable: /bin/bash
   become: false
+  register: sunshine_aur_result
+  changed_when: "'there is nothing to do' not in sunshine_aur_result.stdout"
   tags: [sunshine, aur]
 
 # ── Scripts ────────────────────────────────────────────────────────────────────
@@ -34,6 +36,9 @@
   loop:
     - sunshine-couch-prep.sh
     - sunshine-couch-undo.sh
+    # Shared with joystick-notify's local couch-mode activate/teardown (lib/status-notify.sh
+    # set_screen_lock) — prevents the screen locking mid-session, on either trigger path.
+    - couch-mode-screen-unlock.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)

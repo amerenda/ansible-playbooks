@@ -196,6 +196,8 @@
       args:
         executable: /bin/bash
       become: false
+      register: workstation_aur_result
+      changed_when: "'there is nothing to do' not in workstation_aur_result.stdout"
       when: archlinux_workstation_aur_packages | length > 0
       tags: [arch-komodo, arch-periphery]
 
