@@ -27,6 +27,7 @@
     - launch-bigpicture.sh
     - game-wrapper.sh
     - force-desk-primary.sh
+    - force-desk-primary-greeter.sh
     - couch-switch.sh
     - check-gpu-connectors.sh
   tags: [joystick-notify, scripts]
@@ -107,6 +108,36 @@
     mode: "0440"
     validate: visudo -cf %s
   tags: [joystick-notify, sudoers]
+
+# ── Systemd system unit: pre-login (plasmalogin greeter) desk-primary ─────────
+#
+# force-desk-primary.service (below, systemd --user) and the
+# 98-monitor-hotplug.rules udev trigger only reach the desk user's own
+# logged-in Plasma session. The plasmalogin greeter runs its own separate
+# KWin/Wayland session before any login, so the couch/TV output (HDMI-A-1)
+# was never disabled for it - both outputs stay extended at the login
+# screen. Runs as User=plasmalogin so it can reach that user's own session
+# bus (DBus session buses reject cross-uid connections, even from root).
+
+- name: Install plasmalogin greeter desk-primary systemd system unit
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/systemd/plasmalogin-desk-primary.service"
+    dest: /etc/systemd/system/plasmalogin-desk-primary.service
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [joystick-notify, service, greeter]
+
+- name: Reload system systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [joystick-notify, service, greeter]
+
+- name: Enable plasmalogin greeter desk-primary unit
+  ansible.builtin.systemd:
+    name: plasmalogin-desk-primary.service
+    enabled: true
+  tags: [joystick-notify, service, greeter]
 
 # ── Systemd user units ────────────────────────────────────────────────────────
 
