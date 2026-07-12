@@ -388,6 +388,44 @@
       when: docker_daemon_json_updated.changed
       tags: [arch-komodo, arch-periphery, arch-docker-dns]
 
+    # ─── UFW firewall rules ────────────────────────────────────────────────
+    # Open the ports that Komodo Core and LiteLLM need to reach this host:
+    #   8120 — Komodo Periphery (Core connects here via TLS)
+    #   11434 — Ollama API (LiteLLM routes archlinux-v0-base / uncensored here)
+    # SSH is guarded separately; these rules are idempotent (ufw module skips
+    # if the rule already exists).
+    - name: Install ufw package
+      pacman:
+        name: ufw
+        state: present
+      tags: [arch-komodo, arch-periphery, arch-ufw]
+
+    - name: Enable UFW with default deny-incoming policy
+      ansible.builtin.command: ufw --force enable
+      changed_when: false
+      tags: [arch-komodo, arch-periphery, arch-ufw]
+
+    - name: Allow SSH through UFW
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+      tags: [arch-komodo, arch-periphery, arch-ufw]
+
+    - name: Allow Komodo Periphery port (8120) through UFW
+      community.general.ufw:
+        rule: allow
+        port: "{{ komodo_periphery_port }}"
+        proto: tcp
+      tags: [arch-komodo, arch-periphery, arch-ufw]
+
+    - name: Allow Ollama API port (11434) through UFW
+      community.general.ufw:
+        rule: allow
+        port: "11434"
+        proto: tcp
+      tags: [arch-komodo, arch-periphery, arch-ufw]
+
     # ─── Deploy Periphery ──────────────────────────────────────────────────
     - name: Build and (re)start Komodo Periphery (force-recreate for env/passkey fixes)
       ansible.builtin.shell: docker compose -f compose.yaml --env-file compose.env up -d --build --force-recreate
