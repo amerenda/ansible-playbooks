@@ -16,8 +16,8 @@
 #
 # Tags (run subsections independently):
 #   common, kde, amd-gpu, gaming, docker, desktop-apps,
-#   ssh-keys, dotfiles, sunshine, joystick-notify, k3s-agent,
-#   komodo, restic
+#   ssh-keys, dotfiles, hardware-tweaks, power-profiles, moondeck, sunshine,
+#   joystick-notify, k3s-agent, komodo, restic
 #
 # Hard constraints:
 #   - /mnt/storage is never touched
@@ -114,6 +114,19 @@
   roles:
     - role: ../../roles/hardware-tweaks
       tags: [hardware-tweaks]
+
+# ── Play 5b: Power profiles (idle → power-saver, active → performance) ────────
+
+- name: CachyOS — idle-based power profile switching
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/power-profiles
+      tags: [power-profiles]
 
 # ── Play 6: MoonDeckBuddy ─────────────────────────────────────────────────────
 
@@ -223,6 +236,26 @@
       failed_when: false
       tags: [summary]
 
+    - name: Verify idle-power-profile user service is active
+      ansible.builtin.command: systemctl --user is-active idle-power-profile.service
+      register: power_profile_check
+      changed_when: false
+      failed_when: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+      tags: [summary]
+
+    - name: Get current power profile
+      ansible.builtin.command: powerprofilesctl get
+      register: power_profile_current
+      changed_when: false
+      failed_when: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+      tags: [summary]
+
     - name: Verify SSH keys exist
       ansible.builtin.stat:
         path: "{{ cachyos_user_home }}/.ssh/{{ item }}"
@@ -247,6 +280,8 @@
           Services:
           - k3s-agent: {{ k3s_check.stdout | default('unknown') }}
           - komodo-periphery: {{ komodo_check.stdout | default('unknown') }}
+          - idle-power-profile: {{ power_profile_check.stdout | default('unknown') }} (current profile: {{ power_profile_current.stdout | default('unknown') }})
+            switch log: ~/.local/state/power-profile-switch.log
 
           SSH keys:
           {% for stat in ssh_checks.results %}
