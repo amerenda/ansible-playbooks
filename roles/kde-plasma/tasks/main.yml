@@ -57,6 +57,24 @@
     mode: "0644"
   tags: [kde, sddm, wayland]
 
+- name: Ensure SDDM .config directory exists
+  ansible.builtin.file:
+    path: /var/lib/sddm/.config
+    state: directory
+    owner: sddm
+    group: sddm
+    mode: "0700"
+  tags: [kde, sddm, display]
+
+- name: Deploy kwinoutputconfig.json for SDDM greeter
+  ansible.builtin.copy:
+    src: sddm-kwinoutputconfig.json
+    dest: /var/lib/sddm/.config/kwinoutputconfig.json
+    owner: sddm
+    group: sddm
+    mode: "0644"
+  tags: [kde, sddm, display]
+
 - name: Set KDE dark theme via kwriteconfig6
   ansible.builtin.shell: |
     kwriteconfig6 --file kdeglobals --group General --key ColorScheme BreezeDark
