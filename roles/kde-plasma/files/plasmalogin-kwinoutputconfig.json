@@ -4,7 +4,7 @@
             {
                 "abmLevel": 0,
                 "allowDdcCi": true,
-                "allowSdrSoftwareBrightness": false,
+                "allowSdrSoftwareBrightness": true,
                 "autoBrightnessCurve": [
                     0,
                     0,
@@ -26,7 +26,7 @@
                 "connectorName": "HDMI-A-2",
                 "customModes": [
                 ],
-                "detectedDdcCi": true,
+                "detectedDdcCi": false,
                 "edidHash": "17c88b42857968bdd07f2d29d8f34986",
                 "edidIdentifier": "DEL 53477 808605013 30 2018 0",
                 "edrPolicy": "always",
@@ -48,7 +48,7 @@
                 "sdrGamutWideness": 0,
                 "sharpness": 0,
                 "transform": "Normal",
-                "uuid": "327c0267-68c5-4709-a1b2-5015abc25234",
+                "uuid": "a8c22392-30b2-4ac5-b224-255dfcef6435",
                 "vrrPolicy": "Never",
                 "wideColorGamut": false
             },
@@ -99,7 +99,7 @@
                 "sdrGamutWideness": 0,
                 "sharpness": 0,
                 "transform": "Normal",
-                "uuid": "4ad8cfe5-d002-4b96-af01-0d728d64c334",
+                "uuid": "4e2031fe-efbb-496d-9fc2-a840b5e343ad",
                 "vrrPolicy": "Never",
                 "wideColorGamut": false
             }

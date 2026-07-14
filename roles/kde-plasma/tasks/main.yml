@@ -57,23 +57,23 @@
     mode: "0644"
   tags: [kde, sddm, wayland]
 
-- name: Ensure SDDM .config directory exists
+- name: Ensure plasmalogin .config directory exists
   ansible.builtin.file:
-    path: /var/lib/sddm/.config
+    path: /var/lib/plasmalogin/.config
     state: directory
-    owner: sddm
-    group: sddm
+    owner: plasmalogin
+    group: plasmalogin
     mode: "0700"
-  tags: [kde, sddm, display]
+  tags: [kde, plasmalogin, display]
 
-- name: Deploy kwinoutputconfig.json for SDDM greeter
+- name: Deploy kwinoutputconfig.json for plasmalogin greeter
   ansible.builtin.copy:
-    src: sddm-kwinoutputconfig.json
-    dest: /var/lib/sddm/.config/kwinoutputconfig.json
-    owner: sddm
-    group: sddm
+    src: plasmalogin-kwinoutputconfig.json
+    dest: /var/lib/plasmalogin/.config/kwinoutputconfig.json
+    owner: plasmalogin
+    group: plasmalogin
     mode: "0644"
-  tags: [kde, sddm, display]
+  tags: [kde, plasmalogin, display]
 
 - name: Set KDE dark theme via kwriteconfig6
   ansible.builtin.shell: |
