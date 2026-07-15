@@ -32,6 +32,19 @@
     - check-gpu-connectors.sh
   tags: [joystick-notify, scripts]
 
+- name: Install joystick-notify sunshine support scripts
+  ansible.builtin.copy:
+    src: "{{ cachyos_joystick_notify_src }}/sunshine/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - couch-mode-screen-unlock.sh
+    - sunshine-couch-prep.sh
+    - sunshine-couch-undo.sh
+  tags: [joystick-notify, scripts]
+
 - name: Install joystick-notify tray app
   ansible.builtin.copy:
     src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-tray.py"
