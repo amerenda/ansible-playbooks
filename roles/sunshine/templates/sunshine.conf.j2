@@ -6,23 +6,42 @@
 # VA-API is the primary encoder for AMD GPUs on Linux.
 encoder = vaapi
 
-# HEVC (H.265) mode: 2 = SDR, 3 = HDR (advertises both Main + Main10).
+# HEVC (H.265) SDR — kept as fallback for clients that don't support AV1.
 hevc_mode = 2
 
-# AV1: 1 = disabled (higher latency, better compression — enable for slow-paced games)
-av1_mode = 1
+# AV1 SDR — enabled: RDNA 4 has hardware AV1 encode (VAProfileAV1Profile0),
+# better compression per bit than HEVC — ideal for WiFi streaming.
+av1_mode = 2
 
 # ── Capture ────────────────────────────────────────────────
 
 # kwin uses KDE's screencast API (lowest overhead on Plasma Wayland).
 capture = kwin
 
-# ── Bitrate & Quality ────────────────────────────────────
+# ── Display ───────────────────────────────────────────────
 
+# Explicit DRM render node (only card1/renderD128 exists on this GPU).
+adapter_name = /dev/dri/renderD128
+
+# DRM output connector to capture. HDMI-A-2 = desk monitor.
+output_name = HDMI-A-2
+
+# ── Display resolution management ─────────────────────────
+# When Moonlight requests a specific resolution, Sunshine switches the output
+# to match so games run at native client resolution instead of being downscaled.
+# Reverts to the previous resolution 1s after stream ends.
+dd_configuration_option = ensure_active
+dd_resolution_option = automatic
+dd_refresh_rate_option = disabled
+dd_config_revert_delay = 1000
+dd_config_revert_on_disconnect = true
+
+# ── Network / Quality ──────────────────────────────────────
+
+# 0 = no server-side cap; Moonlight clients set their own bitrate target.
 max_bitrate = 0
-bitrate = 25000
-rc_mode = cbr
-keyint = 2
+
+# 20% FEC overhead — recovers from WiFi packet bursts without retransmit stalls.
 fec_percentage = 20
 
 # ── Performance ───────────────────────────────────────────
@@ -35,7 +54,9 @@ min_threads = 4
 log_path = /tmp/sunshine.log
 min_log_level = 3
 
-# ── Audio ─────────────────────────────────────────────────
-
-audio_sample_rate = 48000
-audio_channels = 2
+# ── Stream lifecycle hooks ────────────────────────────────
+# On stream start: switch to Couch virtual desktop, dismiss the KDE lock screen
+#   (loginctl unlock-session + pkill kscreenlocker_greet), disable idle autolock.
+# On stream end: restore previous desktop, re-enable idle autolock.
+# cursor-stream-hide/show are optional — only included if installed.
+global_prep_cmd=[{"do":"/usr/local/bin/sunshine-couch-prep.sh","undo":"/usr/local/bin/sunshine-couch-undo.sh","elevated":false}]
