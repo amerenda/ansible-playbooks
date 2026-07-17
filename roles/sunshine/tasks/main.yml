@@ -5,12 +5,25 @@
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
 
-- name: Add user to input group (Sunshine needs /dev/input access)
+- name: Add user to input and realtime groups (Sunshine needs /dev/input access and priority scheduling)
   ansible.builtin.user:
     name: "{{ cachyos_user }}"
     groups:
       - input
+      - realtime
     append: true
+  tags: [sunshine, groups]
+
+- name: Allow Sunshine encoding threads to reach nice -15 (override realtime group's -11 cap)
+  ansible.builtin.copy:
+    content: |
+      # Allow {{ cachyos_user }} to set process priority as low as nice -20.
+      # Sunshine's encoding threads request nice -15; the realtime group only allows -11.
+      {{ cachyos_user }} - nice -20
+    dest: /etc/security/limits.d/91-sunshine-nice.conf
+    owner: root
+    group: root
+    mode: "0644"
   tags: [sunshine, groups]
 
 - name: Install sunshine from AUR
