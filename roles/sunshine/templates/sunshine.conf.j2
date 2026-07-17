@@ -18,13 +18,13 @@ av1_mode = 2
 # kwin uses KDE's screencast API (lowest overhead on Plasma Wayland).
 capture = kwin
 
-# ── Display ───────────────────────────────────────────────
+# ── Display ────────────────────────────────────────────────{% if sunshine_adapter_name is defined and sunshine_adapter_name %}
 
 # Explicit DRM render node (only card1/renderD128 exists on this GPU).
-adapter_name = /dev/dri/renderD128
+adapter_name = {{ sunshine_adapter_name }}{% endif %}{% if sunshine_output_name is defined and sunshine_output_name %}
 
 # DRM output connector to capture. HDMI-A-2 = desk monitor.
-output_name = HDMI-A-2
+output_name = {{ sunshine_output_name }}{% endif %}
 
 # ── Display resolution management ─────────────────────────
 # When Moonlight requests a specific resolution, Sunshine switches the output
@@ -58,5 +58,5 @@ min_log_level = 3
 # On stream start: switch to Couch virtual desktop, dismiss the KDE lock screen
 #   (loginctl unlock-session + pkill kscreenlocker_greet), disable idle autolock.
 # On stream end: restore previous desktop, re-enable idle autolock.
-# cursor-stream-hide/show are optional — only included if installed.
-global_prep_cmd=[{"do":"/usr/local/bin/sunshine-couch-prep.sh","undo":"/usr/local/bin/sunshine-couch-undo.sh","elevated":false}]
+# cursor-stream-hide/show are optional — only included if installed.{% if sunshine_global_prep_cmd is defined %}
+global_prep_cmd={{ sunshine_global_prep_cmd }}{% endif %}

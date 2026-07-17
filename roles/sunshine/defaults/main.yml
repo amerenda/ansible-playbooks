@@ -1,0 +1,14 @@
+---
+# Role defaults — safe fallbacks; override in group_vars/host_vars per machine.
+
+# DRM render node and output connector (hardware-specific).
+# Override in group_vars for each machine's GPU setup.
+sunshine_adapter_name: "/dev/dri/card0"
+sunshine_output_name: "HDMI-A-1"
+
+# Stream lifecycle hooks — dict rendered to JSON via tojson in the template.
+# Empty list disables lifecycle hooks.
+sunshine_global_prep_cmd:
+  do: /usr/local/bin/sunshine-couch-prep.sh
+  undo: /usr/local/bin/sunshine-couch-undo.sh
+  elevated: false

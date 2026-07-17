@@ -3,3 +3,12 @@
 # Host vars merge reliably for ansible_connection=local; group_vars/archlinux_k3s.yml mirrors these.
 longhorn_host_disk_path: /mnt/storage/longhorn
 longhorn_k8s_namespace: default
+
+# ── Sunshine (hardware-specific DRM / lifecycle hook paths) ──────────────────
+# Override on other hosts with their own GPU DRMs / script paths.
+# Unset on a host → corresponding sections omitted from sunshine.conf.
+
+sunshine_adapter_name: "/dev/dri/renderD128"
+sunshine_output_name: "HDMI-A-2"
+sunshine_global_prep_cmd: >-
+  [{"do":"/usr/local/bin/sunshine-couch-prep.sh","undo":"/usr/local/bin/sunshine-couch-undo.sh","elevated":false}]
