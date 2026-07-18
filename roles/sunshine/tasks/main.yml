@@ -100,6 +100,7 @@
     group: "{{ cachyos_user }}"
     mode: "0644"
   become: false
+  notify: Restart sunshine service
   tags: [sunshine, config]
 
 - name: Install sunshine apps.json
@@ -112,6 +113,35 @@
   become: false
   notify: Restart sunshine service
   tags: [sunshine, config]
+
+# ── Firewall (UFW) ────────────────────────────────────────────────────────────
+
+- name: Allow Sunshine TCP ports through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    comment: "Sunshine streaming"
+  loop:
+    - "47984"   # HTTPS
+    - "47989"   # HTTP
+    - "47990"   # web UI
+    - "48010"   # RTSP
+  tags: [sunshine, ufw]
+
+- name: Allow Sunshine UDP ports through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: udp
+    comment: "Sunshine streaming"
+  loop:
+    - "47998"   # video
+    - "47999"   # control
+    - "48000"   # audio
+    - "48002"   # input
+    - "48010"   # mic
+  tags: [sunshine, ufw]
 
 # ── Udev / cap_sys_admin ───────────────────────────────────────────────────────
 
