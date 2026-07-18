@@ -2,3 +2,13 @@
 - name: Reload udev rules
   ansible.builtin.command: udevadm control --reload-rules
   changed_when: false
+
+- name: Restart sunshine service
+  ansible.builtin.systemd:
+    name: app-dev.lizardbyte.app.Sunshine.service
+    state: restarted
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"

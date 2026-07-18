@@ -110,6 +110,7 @@
     group: "{{ cachyos_user }}"
     mode: "0644"
   become: false
+  notify: Restart sunshine service
   tags: [sunshine, config]
 
 # ── Udev / cap_sys_admin ───────────────────────────────────────────────────────
