@@ -52,6 +52,8 @@
     # Shared with joystick-notify's local couch-mode activate/teardown (lib/status-notify.sh
     # set_screen_lock) — prevents the screen locking mid-session, on either trigger path.
     - couch-mode-screen-unlock.sh
+    # Integration test — run manually to verify the unlock script works end-to-end.
+    - test-screen-unlock.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)
