@@ -2,14 +2,28 @@
     "apps": [
         {
             "image-path": "desktop.png",
-            "name": "Desktop"
+            "name": "Desktop",
+            "prep-cmd": [
+                {
+                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
+                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
+                    "elevated": false
+                }
+            ]
         },
         {
             "detached": [
                 "/usr/local/bin/launch-bigpicture.sh"
             ],
             "image-path": "steam.png",
-            "name": "Steam Big Picture"
+            "name": "Steam Big Picture",
+            "prep-cmd": [
+                {
+                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
+                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
+                    "elevated": false
+                }
+            ]
         }
     ],
     "env": {

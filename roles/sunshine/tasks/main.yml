@@ -52,6 +52,11 @@
     # Shared with joystick-notify's local couch-mode activate/teardown (lib/status-notify.sh
     # set_screen_lock) — prevents the screen locking mid-session, on either trigger path.
     - couch-mode-screen-unlock.sh
+    # Holds ScreenSaver.Inhibit() cookie for the session lifetime; started by
+    # sunshine-couch-prep.sh and killed by sunshine-couch-undo.sh.
+    - screen-lock-inhibit-daemon.sh
+    # Integration test — run manually to verify the unlock script works end-to-end.
+    - test-screen-unlock.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)
@@ -105,6 +110,7 @@
     group: "{{ cachyos_user }}"
     mode: "0644"
   become: false
+  notify: Restart sunshine service
   tags: [sunshine, config]
 
 # ── Udev / cap_sys_admin ───────────────────────────────────────────────────────
