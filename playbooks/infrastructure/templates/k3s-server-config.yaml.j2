@@ -23,10 +23,19 @@ token: "{{ k3s_token }}"
 data-dir: "{{ k3s_data_dir }}"
 
 # Disable components we don't need
+# servicelb is disabled because MetalLB is the cluster's LoadBalancer
+# provider (metallb-system namespace, L2Advertisement over 10.100.20.201-239).
+# Running both simultaneously causes them to fight over every LoadBalancer
+# Service: k3s's ServiceLB controller assigns node IPs, MetalLB's speaker
+# rejects those IPs as outside its configured pool, and the resulting
+# reconcile churn crash-loops the speaker pods and makes the shared
+# external IP (10.100.20.203) intermittently reset connections for every
+# *.amer.dev hostname behind it.
 disable:
   - traefik
   - local-storage
   - metrics-server
+  - servicelb
 
 # Enable features we need
 kube-apiserver-arg:
