@@ -80,6 +80,65 @@
     - "{{ cachyos_joystick_notify_src }}/sunshine/cursor-stream-*.sh"
   tags: [sunshine, scripts]
 
+# ── KWin Wayland screencast permission ──────────────────────────────────────────
+# KWin only advertises zkde_screencast_unstable_v1 (required by `capture = kwin`)
+# to Wayland clients when KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 is set in KWin's OWN
+# environment. This must be sourced by startplasma-wayland before KWin starts —
+# setting it in Sunshine's service environment has no effect. Without it Sunshine
+# fails with "Couldn't find any working encoder matching [vaapi]" /
+# "Unable to find display or encoder during startup" even though vainfo and the
+# DRM connector are both fine.
+
+- name: Ensure ~/.config/plasma-workspace/env exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/plasma-workspace/env"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Deploy kwin-perms.sh (advertise zkde_screencast_unstable_v1 to Wayland clients)
+  ansible.builtin.copy:
+    content: |
+      # Sourced by startplasma-wayland before KWin starts. Without this, KWin
+      # never advertises zkde_screencast_unstable_v1, so `capture = kwin` in
+      # Sunshine can't find a display/encoder and fails at startup.
+      export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+    dest: "{{ cachyos_user_home }}/.config/plasma-workspace/env/kwin-perms.sh"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Ensure ~/.local/share/applications exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.local/share/applications"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Deploy Sunshine desktop file override (KWin binary→desktop-file matching)
+  ansible.builtin.copy:
+    content: |
+      [Desktop Entry]
+      Name=Sunshine
+      Exec=/usr/bin/sunshine
+      Type=Application
+      NoDisplay=true
+      X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1
+    dest: "{{ cachyos_user_home }}/.local/share/applications/dev.lizardbyte.app.Sunshine.desktop"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  tags: [sunshine, kwin]
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 - name: Ensure ~/.config/sunshine exists
