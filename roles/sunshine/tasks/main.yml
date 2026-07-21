@@ -57,6 +57,9 @@
     - screen-lock-inhibit-daemon.sh
     # Integration test — run manually to verify the unlock script works end-to-end.
     - test-screen-unlock.sh
+    # Regression guard for the 2026-07-19/20 outage chain (KWin perms, desktop-file
+    # override, env-var desync, CSRF/origin config, UFW, service health, live API).
+    - test-sunshine-connectivity.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)
@@ -252,6 +255,37 @@
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [sunshine, service]
+
+# ── Verification ───────────────────────────────────────────────────────────────
+# Regression guard for the 2026-07-19/20 outage chain. Not hard-failed: some
+# checks (e.g. live env-var consistency) are expected to fail immediately after
+# a fresh deploy until the next full session login, so this reports for human
+# review rather than blocking the play.
+
+- name: Run sunshine connectivity regression test
+  ansible.builtin.command: /usr/local/bin/test-sunshine-connectivity.sh
+  become: false
+  register: sunshine_connectivity_test
+  changed_when: false
+  failed_when: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [sunshine, verify]
+
+- name: Show sunshine connectivity test results
+  ansible.builtin.debug:
+    msg: "{{ sunshine_connectivity_test.stdout_lines }}"
+  tags: [sunshine, verify]
+
+- name: Warn if sunshine connectivity test has failures
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sunshine-connectivity test reported failures (exit {{ sunshine_connectivity_test.rc }}).
+      Review the output above — some failures are expected right after a fresh deploy
+      (e.g. live env consistency, which only resolves after the next full session login).
+  when: sunshine_connectivity_test.rc != 0
+  tags: [sunshine, verify]
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 # (inline — handlers not supported in role tasks list directly; use notify target)

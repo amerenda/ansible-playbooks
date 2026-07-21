@@ -36,6 +36,21 @@ dd_refresh_rate_option = disabled
 dd_config_revert_delay = 1000
 dd_config_revert_on_disconnect = true
 
+# ── Web UI / CSRF ──────────────────────────────────────────
+
+# The web UI is also reached remotely via the Tailscale subnet router
+# (10.100.20.0/24 route), which presents a different Origin than the
+# default localhost/LAN-hostname origin Sunshine trusts by default —
+# without this, pairing over that path fails with a CSRF protection error.
+csrf_allowed_origins = https://10.100.20.25:47990
+
+# Sunshine's /api/pin endpoint always reports {"status": true} regardless of
+# whether pairing actually completes (upstream bug, LizardByte/Sunshine#3944).
+# The real gate is this origin check: without "wan", PIN submissions from a
+# non-LAN origin (e.g. routed through the Tailscale subnet router) silently
+# fail to complete pairing server-side even though the UI reports success.
+origin_web_ui_allowed = wan
+
 # ── Network / Quality ──────────────────────────────────────
 
 # 0 = no server-side cap; Moonlight clients set their own bitrate target.
@@ -52,7 +67,7 @@ min_threads = 4
 # ── Logging ───────────────────────────────────────────────
 
 log_path = /tmp/sunshine.log
-min_log_level = 3
+min_log_level = 0
 
 # ── Stream lifecycle hooks ────────────────────────────────
 # On stream start: switch to Couch virtual desktop, dismiss the KDE lock screen
