@@ -137,6 +137,7 @@ cachyos_aur_packages:
   - sunshine
   - proton-ge-custom-bin
   - game-devices-udev
+  - moondeckbuddy-appimage
 
 # ── Services ──────────────────────────────────────────────────────────────────
 
@@ -176,10 +177,6 @@ cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
 
 # gfx1201 (RDNA 4 / RX 9070 XT) — may need HSA version override for some ROCm tools
 cachyos_rocm_gfx_override: "11.0.0"
-
-# ── MoonDeck ──────────────────────────────────────────────────────────────────
-
-moondeck_version: "1.9.0"
 
 # ── Power profiles (idle → power-saver, active → performance) ─────────────────
 # power-profiles-daemon has no idle detection of its own — paired with swayidle
