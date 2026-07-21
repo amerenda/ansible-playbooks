@@ -57,6 +57,9 @@
     - screen-lock-inhibit-daemon.sh
     # Integration test — run manually to verify the unlock script works end-to-end.
     - test-screen-unlock.sh
+    # Regression guard for the 2026-07-19/20 outage chain (KWin perms, desktop-file
+    # override, env-var desync, CSRF/origin config, UFW, service health, live API).
+    - test-sunshine-connectivity.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)
@@ -79,6 +82,65 @@
   with_fileglob:
     - "{{ cachyos_joystick_notify_src }}/sunshine/cursor-stream-*.sh"
   tags: [sunshine, scripts]
+
+# ── KWin Wayland screencast permission ──────────────────────────────────────────
+# KWin only advertises zkde_screencast_unstable_v1 (required by `capture = kwin`)
+# to Wayland clients when KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 is set in KWin's OWN
+# environment. This must be sourced by startplasma-wayland before KWin starts —
+# setting it in Sunshine's service environment has no effect. Without it Sunshine
+# fails with "Couldn't find any working encoder matching [vaapi]" /
+# "Unable to find display or encoder during startup" even though vainfo and the
+# DRM connector are both fine.
+
+- name: Ensure ~/.config/plasma-workspace/env exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/plasma-workspace/env"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Deploy kwin-perms.sh (advertise zkde_screencast_unstable_v1 to Wayland clients)
+  ansible.builtin.copy:
+    content: |
+      # Sourced by startplasma-wayland before KWin starts. Without this, KWin
+      # never advertises zkde_screencast_unstable_v1, so `capture = kwin` in
+      # Sunshine can't find a display/encoder and fails at startup.
+      export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+    dest: "{{ cachyos_user_home }}/.config/plasma-workspace/env/kwin-perms.sh"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Ensure ~/.local/share/applications exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.local/share/applications"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [sunshine, kwin]
+
+- name: Deploy Sunshine desktop file override (KWin binary→desktop-file matching)
+  ansible.builtin.copy:
+    content: |
+      [Desktop Entry]
+      Name=Sunshine
+      Exec=/usr/bin/sunshine
+      Type=Application
+      NoDisplay=true
+      X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1
+    dest: "{{ cachyos_user_home }}/.local/share/applications/dev.lizardbyte.app.Sunshine.desktop"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  tags: [sunshine, kwin]
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -193,6 +255,37 @@
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [sunshine, service]
+
+# ── Verification ───────────────────────────────────────────────────────────────
+# Regression guard for the 2026-07-19/20 outage chain. Not hard-failed: some
+# checks (e.g. live env-var consistency) are expected to fail immediately after
+# a fresh deploy until the next full session login, so this reports for human
+# review rather than blocking the play.
+
+- name: Run sunshine connectivity regression test
+  ansible.builtin.command: /usr/local/bin/test-sunshine-connectivity.sh
+  become: false
+  register: sunshine_connectivity_test
+  changed_when: false
+  failed_when: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [sunshine, verify]
+
+- name: Show sunshine connectivity test results
+  ansible.builtin.debug:
+    msg: "{{ sunshine_connectivity_test.stdout_lines }}"
+  tags: [sunshine, verify]
+
+- name: Warn if sunshine connectivity test has failures
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sunshine-connectivity test reported failures (exit {{ sunshine_connectivity_test.rc }}).
+      Review the output above — some failures are expected right after a fresh deploy
+      (e.g. live env consistency, which only resolves after the next full session login).
+  when: sunshine_connectivity_test.rc != 0
+  tags: [sunshine, verify]
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 # (inline — handlers not supported in role tasks list directly; use notify target)
