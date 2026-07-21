@@ -518,6 +518,43 @@
       become: yes
       tags: [mini-secrets]
 
+    # slzb-proxy.py mitigates the SLZB-06MG24/EFR32 coordinator crash-loop bug
+    # (see komodo-dean-gitops/mac-mini-m4/zigbee2mqtt/CRASH_LOOP_INVESTIGATION.md).
+    # The LaunchDaemon plist was added 2026-07-19 but was only ever installed on
+    # disk, never actually bootstrapped into launchd — it silently ran as a
+    # manually-started, non-persistent process instead (confirmed 2026-07-20:
+    # `launchctl list` showed it NOT LOADED despite the plist existing at
+    # /Library/LaunchDaemons/). This closes that gap for real.
+    - name: Install slzb-proxy LaunchDaemon
+      copy:
+        src: "{{ macmini_compose_dir }}/launchd/com.local.slzb-proxy.plist"
+        dest: /Library/LaunchDaemons/com.local.slzb-proxy.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-slzb-proxy]
+
+    - name: Load slzb-proxy LaunchDaemon
+      shell: "launchctl load /Library/LaunchDaemons/com.local.slzb-proxy.plist 2>/dev/null || true"
+      become: yes
+      changed_when: false
+      tags: [mini-slzb-proxy]
+
+    # sync-stacks.sh kickstarts slzb-proxy after git pull when slzb-proxy.py
+    # changes, so code fixes take effect without a manual SSH restart.
+    - name: Allow user to kickstart slzb-proxy after host gitops sync (passwordless)
+      ansible.builtin.copy:
+        content: "{{ target_user }} ALL=(root) NOPASSWD: /bin/launchctl kickstart -k system/com.local.slzb-proxy\n"
+        dest: "/etc/sudoers.d/{{ target_user }}-komodo-slzb-proxy-kickstart"
+        owner: root
+        group: wheel
+        mode: "0440"
+        validate: "/usr/sbin/visudo -cf %s"
+      become: yes
+      tags: [mini-slzb-proxy]
+
     - name: Run inject-secrets.sh to populate all secrets
       shell: "bash {{ macmini_compose_dir }}/scripts/inject-secrets.sh"
       become: yes
