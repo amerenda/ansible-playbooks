@@ -24,6 +24,18 @@
                     "elevated": false
                 }
             ]
+        },
+        {
+            "cmd": "/usr/bin/MoonDeckStream",
+            "image-path": "steam.png",
+            "name": "MoonDeckStream",
+            "prep-cmd": [
+                {
+                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
+                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
+                    "elevated": false
+                }
+            ]
         }
     ],
     "env": {
