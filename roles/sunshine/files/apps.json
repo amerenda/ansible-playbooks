@@ -34,6 +34,11 @@
                     "do": "/usr/local/bin/sunshine-couch-prep.sh",
                     "undo": "/usr/local/bin/sunshine-couch-undo.sh",
                     "elevated": false
+                },
+                {
+                    "do": "/usr/local/bin/sunshine-moondeck-res-prep.sh",
+                    "undo": "/usr/local/bin/sunshine-moondeck-res-undo.sh",
+                    "elevated": false
                 }
             ]
         }
