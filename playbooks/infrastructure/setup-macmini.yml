@@ -536,6 +536,19 @@
       become: yes
       tags: [mini-slzb-proxy]
 
+    # `launchctl load` on an already-loaded label is a no-op for the definition
+    # itself — a plist edit (e.g. this playbook re-pointing ProgramArguments)
+    # silently keeps running under the OLD definition until an unload/load
+    # cycle. Discovered 2026-07-21: this task alone left slzb-proxy running a
+    # stale script path for hours after the "fixed" plist was installed.
+    # Unload first (ignore failure — fine if it wasn't loaded yet) so load
+    # always picks up the current on-disk plist.
+    - name: Unload slzb-proxy LaunchDaemon (force definition refresh)
+      shell: "launchctl unload /Library/LaunchDaemons/com.local.slzb-proxy.plist 2>/dev/null || true"
+      become: yes
+      changed_when: false
+      tags: [mini-slzb-proxy]
+
     - name: Load slzb-proxy LaunchDaemon
       shell: "launchctl load /Library/LaunchDaemons/com.local.slzb-proxy.plist 2>/dev/null || true"
       become: yes
