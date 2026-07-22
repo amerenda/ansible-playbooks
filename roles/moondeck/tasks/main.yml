@@ -93,3 +93,13 @@
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [moondeck, service]
+
+# ── Firewall (UFW) ────────────────────────────────────────────────────────────
+
+- name: Allow MoonDeckBuddy TCP port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "59999"
+    proto: tcp
+    comment: "MoonDeckBuddy"
+  tags: [moondeck, ufw]
