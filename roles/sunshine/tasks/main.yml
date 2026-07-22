@@ -57,10 +57,6 @@
     - screen-lock-inhibit-daemon.sh
     # Integration test — run manually to verify the unlock script works end-to-end.
     - test-screen-unlock.sh
-    # MoonDeckStream app prep-cmd — switches host resolution to the Steam
-    # Deck's native 1280x800 for the stream, restores it when the stream ends.
-    - sunshine-moondeck-res-prep.sh
-    - sunshine-moondeck-res-undo.sh
   tags: [sunshine, scripts]
 
 - name: Install launch-bigpicture script (used by sunshine apps.json)
