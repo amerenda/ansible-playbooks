@@ -68,6 +68,27 @@
     mode: "0755"
   tags: [sunshine, scripts]
 
+# Virtual-display scripts — see roles/sunshine/files/sunshine-display-backend.sh
+# for why: Sunshine's dd_resolution_option automatic resolution switching does
+# not work under capture=kwin (confirmed via zero display-device log activity
+# during a live session — the physical output never actually resized). A
+# krfb-virtualmonitor output created at the client's requested resolution and
+# captured directly sidesteps the issue entirely, and applies uniformly to
+# every app/client (Steam Deck, 4K TV, bedroom TV) since Sunshine's capture
+# target is a single global setting, not per-app.
+- name: Install sunshine virtual-display scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - sunshine-display-backend.sh
+    - sunshine-vdisplay-connect.sh
+    - sunshine-vdisplay-disconnect.sh
+  tags: [sunshine, scripts]
+
 # cursor-stream-hide/show scripts — install only if present in the repo
 - name: Install cursor-stream scripts if present in sunshine dir
   ansible.builtin.copy:

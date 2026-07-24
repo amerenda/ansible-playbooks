@@ -62,6 +62,10 @@ cachyos_pacman_packages:
   - plasma-nm
   - kscreen
   - alacritty
+  # krfb-virtualmonitor — creates a headless KWin output for Sunshine to
+  # capture, sized dynamically to whatever the connecting client requests.
+  # See roles/sunshine/files/sunshine-display-backend.sh.
+  - krfb
   # AMD GPU (gfx1201 / RDNA 4)
   - mesa
   - lib32-mesa
