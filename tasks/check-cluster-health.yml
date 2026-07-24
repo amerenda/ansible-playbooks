@@ -11,6 +11,9 @@
 # Optional variables:
 #   health_check_context: "string describing what operation is about to happen"
 #   skip_health_check: true  (bypass — only for recovery/force playbooks)
+#   health_check_exclude_hosts: []  (node names to ignore in the NotReady check —
+#     for recovering a node that is itself the expected-broken target; it has no
+#     quorum impact since it's already down, so gating on it blocks its own fix)
 
 - name: Skip health check if explicitly bypassed
   ansible.builtin.debug:
@@ -47,6 +50,7 @@
           | list
           | first | default('Unknown')
         ) != 'True'
+        and item.metadata.name not in (health_check_exclude_hosts | default([]))
 
     - name: Set total node count for health check
       ansible.builtin.set_fact:

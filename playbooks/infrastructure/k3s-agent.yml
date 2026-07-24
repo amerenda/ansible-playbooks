@@ -28,6 +28,9 @@
       ansible.builtin.include_tasks: ../../tasks/check-cluster-health.yml
       vars:
         health_check_context: "k3s agent install/update on {{ inventory_hostname }}"
+        # This node is the expected-broken target being recovered — it's an agent,
+        # not a controller/etcd member, so excluding it from the gate has no quorum impact.
+        health_check_exclude_hosts: ["{{ inventory_hostname }}"]
       when: k3s_agent_pre_check.status.ActiveState | default('inactive') == 'active'
 
     - name: Check if k3s agent is already running
@@ -117,6 +120,31 @@
         group: root
         mode: '0644'
       when: not (k3s_agent_running.status.ActiveState == 'active' and not replace_cluster_bool)
+      tags: [k3s, config]
+
+    # A forced rejoin (replace_cluster_bool=true) is also how we recover a node whose
+    # OS was reinstalled. A reinstall generates a fresh /etc/rancher/node/password
+    # locally, but the k3s server still holds the *old* node-password secret and Node
+    # object under the same hostname — it rejects the new agent with "node password
+    # rejected, duplicate hostname" forever, no matter how fresh the join token is.
+    # Clearing the stale server-side identity lets the server accept the new password
+    # and re-register the node cleanly. Safe/idempotent even when nothing is stale.
+    - name: Delete stale node-password secret for this host
+      ansible.builtin.command: >-
+        kubectl -n kube-system delete secret {{ inventory_hostname }}.node-password.k3s --ignore-not-found=true
+      delegate_to: "{{ groups['controllers'][0] }}"
+      become: true
+      changed_when: true
+      when: replace_cluster_bool | default(false) | bool
+      tags: [k3s, config]
+
+    - name: Delete stale node object for this host
+      ansible.builtin.command: >-
+        kubectl delete node {{ inventory_hostname }} --ignore-not-found=true
+      delegate_to: "{{ groups['controllers'][0] }}"
+      become: true
+      changed_when: true
+      when: replace_cluster_bool | default(false) | bool
       tags: [k3s, config]
 
     - name: Start and enable k3s agent service

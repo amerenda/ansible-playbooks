@@ -12,9 +12,6 @@ node-ip: "{{ ansible_host }}"
 # Data directory
 data-dir: "/var/lib/rancher/k3s"
 
-# Logging
-log: "/var/log/k3s-agent.log"
-
 # Kubelet configuration for Longhorn-only node
 # Memory reservations are tuned per-node via group_vars (default 128Mi
 # for very small nodes, 256Mi for larger nodes)
