@@ -71,6 +71,35 @@
     mode: "0644"
   tags: [kde, plasmalogin, autologin]
 
+- name: Install lock-on-login script (keeps autologin from handing out an open desktop)
+  ansible.builtin.copy:
+    src: lock-on-login.sh
+    dest: /usr/local/bin/lock-on-login.sh
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [kde, plasmalogin, autologin]
+
+- name: Ensure ~/.config/autostart exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/autostart"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [kde, plasmalogin, autologin]
+
+- name: Install lock-on-login autostart entry
+  ansible.builtin.copy:
+    src: lock-on-login.desktop
+    dest: "{{ cachyos_user_home }}/.config/autostart/lock-on-login.desktop"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  tags: [kde, plasmalogin, autologin]
+
 - name: Ensure plasmalogin .config directory exists
   ansible.builtin.file:
     path: /var/lib/plasmalogin/.config
