@@ -57,6 +57,20 @@
     mode: "0644"
   tags: [kde, sddm, wayland]
 
+- name: Configure plasmalogin autologin (so graphical-session.target, and therefore
+    Sunshine/MoonDeckBuddy/joystick-notify, come up without a physical login)
+  ansible.builtin.copy:
+    content: |
+      [Autologin]
+      User={{ cachyos_user }}
+      Session=plasma
+      Relogin=true
+    dest: /etc/plasmalogin.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kde, plasmalogin, autologin]
+
 - name: Ensure plasmalogin .config directory exists
   ansible.builtin.file:
     path: /var/lib/plasmalogin/.config
