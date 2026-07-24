@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Lock On Login
+Comment=Locks the session immediately at Plasma startup (see lock-on-login.sh)
+Exec=/usr/local/bin/lock-on-login.sh
+X-KDE-autostart-phase=1
+NoDisplay=true
