@@ -152,6 +152,16 @@
   notify: Reload udev rules
   tags: [hardware-tweaks, udev]
 
+- name: Install USB hub autosuspend disable rule (keyboard/mouse receiver hub)
+  ansible.builtin.copy:
+    src: 11-usb-hub-powersave.rules
+    dest: /etc/udev/rules.d/11-usb-hub-powersave.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload udev rules
+  tags: [hardware-tweaks, udev]
+
 - name: Install 8BitDo controller udev rules
   ansible.builtin.copy:
     src: 98-local-8bitdo.rules
