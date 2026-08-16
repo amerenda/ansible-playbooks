@@ -177,6 +177,14 @@ cachyos_dotfiles_dest: "{{ cachyos_user_home }}/projects/dotfiles"
 
 cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
 
+# ── Power management (KDE / powerdevil) ────────────────────────────────────────
+
+kde_display_off_idle_timeout_sec: 600
+kde_display_off_idle_timeout_locked_sec: 300
+# How often to defensively restart powerdevil to clear stale DDC/CI
+# display-watch state (see roles/kde-plasma/tasks/main.yml for why).
+kde_powerdevil_refresh_interval: "4h"
+
 # ── ROCm ──────────────────────────────────────────────────────────────────────
 
 # gfx1201 (RDNA 4 / RX 9070 XT) — may need HSA version override for some ROCm tools
