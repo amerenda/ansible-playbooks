@@ -21,6 +21,13 @@ homebrew_packages:
   - tailscale
   - kubernetes-cli
   - socat
+  - ollama   # CLI/binary only — server runs as our own LaunchDaemon, not `brew services`
+
+# Ollama models to keep pulled (idempotent — playbook skips any already present).
+# nomic-embed-text is the only model anything in prod currently depends on
+# (mem0's embedder, via LiteLLM). Add more here if a new dependency shows up.
+ollama_models:
+  - nomic-embed-text
 
 # System (timezone also in group_vars/servers.yml)
 

@@ -20,6 +20,7 @@
 #   mini-orbstack   — Start and configure OrbStack
 #   mini-secrets    — Fetch secrets from Bitwarden, write to disk
 #   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
+#   mini-ollama     — Install native Ollama, LaunchDaemon, pull models
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-bluebubbles — Install BlueBubbles iMessage proxy
 #   mini-dns        — pf DNS redirect + dns-udp-proxy.py for Technitium (no BWS token needed)
@@ -873,6 +874,78 @@
         label: "{{ item.name }}"
       tags: [mini-komodo]
 
+    # ─── Ollama (native, bare-metal for Metal/GPU access) ─────────────────
+    # Docker on macOS has no Metal passthrough, so Ollama in a container is
+    # CPU-only — this is why it was pulled out of Komodo entirely. Runs as
+    # our own root LaunchDaemon (not `brew services`, which installs a
+    # per-user LaunchAgent that only starts after GUI login) so it survives
+    # a full power cycle with zero manual steps and no auto-login required.
+    # See komodo-dean-gitops/mac-mini-m4/launchd/com.local.ollama.plist.
+
+    - name: Stop any stray Homebrew-managed Ollama service (avoid double-listener on :11434)
+      shell: "{{ homebrew_bin }}/brew services stop ollama 2>/dev/null || true"
+      environment:
+        HOMEBREW_SERVICES_NO_DOMAIN_WARNING: "1"
+      become: no
+      changed_when: false
+      tags: [mini-ollama]
+
+    - name: Install Ollama LaunchDaemon
+      copy:
+        src: "{{ macmini_compose_dir }}/launchd/com.local.ollama.plist"
+        dest: /Library/LaunchDaemons/com.local.ollama.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-ollama]
+
+    # A plain `load` on an already-loaded label doesn't pick up plist edits
+    # (same lesson learned the hard way for slzb-proxy — see that block above).
+    # Unload first so load always picks up the current on-disk plist.
+    - name: Restart Ollama LaunchDaemon (force definition refresh)
+      shell: |
+        launchctl bootout system /Library/LaunchDaemons/com.local.ollama.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.ollama.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.ollama.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.ollama.plist
+      become: yes
+      changed_when: false
+      tags: [mini-ollama]
+
+    - name: Wait for Ollama to be ready
+      shell: "curl -sf http://localhost:11434/api/version > /dev/null 2>&1"
+      register: ollama_ready
+      become: no
+      retries: 12
+      delay: 5
+      until: ollama_ready.rc == 0
+      changed_when: false
+      tags: [mini-ollama]
+
+    - name: Verify Ollama is bound to the LAN (not just localhost)
+      uri:
+        url: "http://{{ macmini_ip }}:11434/api/version"
+        method: GET
+        status_code: 200
+      become: no
+      tags: [mini-ollama]
+
+    - name: Check installed Ollama models
+      command: "{{ homebrew_bin }}/ollama list"
+      register: ollama_models_installed
+      become: no
+      changed_when: false
+      tags: [mini-ollama]
+
+    - name: Pull required Ollama models
+      command: "{{ homebrew_bin }}/ollama pull {{ item }}"
+      loop: "{{ ollama_models }}"
+      when: item not in ollama_models_installed.stdout
+      become: no
+      tags: [mini-ollama]
+
     # ─── Tailscale ─────────────────────────────────────────────────────────
     - name: Check if Tailscale is running
       shell: "{{ homebrew_bin }}/tailscale status 2>&1"
@@ -1083,6 +1156,9 @@
 
           Komodo UI: http://{{ macmini_ip }}:9120
             Admin user: admin (change password on first login!)
+
+          Ollama: native, bound to {{ macmini_ip }}:11434 (LaunchDaemon, no login required)
+            Models: {{ ollama_models | join(', ') }}
 
           Komodo stacks (deployed via resource-sync):
           {% for stack in stacks_status.json | default([]) %}
