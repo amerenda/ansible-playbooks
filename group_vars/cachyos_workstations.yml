@@ -98,6 +98,8 @@ cachyos_pacman_packages:
   - docker
   - docker-compose
   - docker-buildx
+  # WinBoat (run Windows apps via Docker+KVM+FreeRDP; requires KVM in BIOS/UEFI)
+  - freerdp
   - kubectl
   - helm
   - terraform
@@ -142,6 +144,7 @@ cachyos_aur_packages:
   - proton-ge-custom-bin
   - game-devices-udev
   - moondeckbuddy-appimage
+  - winboat-bin
 
 # ── Services ──────────────────────────────────────────────────────────────────
 
