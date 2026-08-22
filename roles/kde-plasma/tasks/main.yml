@@ -85,3 +85,110 @@
     executable: /bin/bash
   changed_when: false
   tags: [kde, theme]
+
+# ── DPMS sleep fix ─────────────────────────────────────────────────────────
+#
+# Confirmed root causes (2026-08-22 investigation, see the joystick-notify
+# repo's plans/ for the incident writeup) of "monitor sleeps then instantly
+# wakes":
+#
+# 1) A KDE/powerdevil bug: powerdevil's own post-DPMS-off display
+#    re-detection cycle resets brightness via the KWin backend, which wakes
+#    the display back up. ddcutil's recently_resumed_from_sleep_by_clocktime
+#    false-positive is one confirmed trigger -- disabling ddcutil
+#    (powerdevil-no-ddcutil.conf) removes that trigger. What's left is
+#    corrected by dpms-sleep-fix.service, which watches for the DPMS-off
+#    log event and re-asserts DPMS-off for 60s (the redetection can fire
+#    more than once per idle-off event).
+#
+# 2) A config bug that was making (1) worse: DimDisplayIdleTimeoutSec was
+#    set to 2147483647 (INT32_MAX seconds) to mean "never dim", but
+#    powerdevil converts this to milliseconds internally, overflowing
+#    32-bit int range and producing "KIdleTime::addIdleTimeout: invalid
+#    timeout: -1000" in the log -- which was driving a continuous ~10s
+#    output-redetection storm independent of any real DPMS event. 0 is the
+#    correct "disabled" sentinel for this field, not INT32_MAX.
+
+- name: DPMS sleep fix (only on hosts with dpms_sleep_fix_desk_connector set, e.g. archlinux)
+  when: dpms_sleep_fix_desk_connector is defined
+  tags: [kde, dpms-sleep-fix]
+  block:
+    - name: Deploy dpms-sleep-fix.sh
+      ansible.builtin.template:
+        src: dpms-sleep-fix.sh.j2
+        dest: /usr/local/bin/dpms-sleep-fix.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure plasma-powerdevil.service.d drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      become: false
+
+    - name: Deploy plasma-powerdevil.service.d drop-ins (no-ddcutil, debug-logging)
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d/{{ item.dest }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+      loop:
+        - { src: powerdevil-no-ddcutil.conf, dest: no-ddcutil.conf }
+        - { src: powerdevil-debug-logging.conf, dest: debug-logging.conf }
+      become: false
+      register: dpms_powerdevil_dropins
+
+    - name: Deploy dpms-sleep-fix.service (systemd --user unit)
+      ansible.builtin.copy:
+        src: dpms-sleep-fix.service
+        dest: "{{ cachyos_user_home }}/.config/systemd/user/dpms-sleep-fix.service"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+      become: false
+
+    - name: Set DimDisplayIdleTimeoutSec to 0 (disabled) instead of overflowing INT32_MAX
+      ansible.builtin.shell: kwriteconfig6 --file powerdevilrc --group AC --group Display --key DimDisplayIdleTimeoutSec 0
+      become: false
+      changed_when: false
+
+    - name: Set TurnOffDisplayIdleTimeoutSec to 45 minutes
+      ansible.builtin.shell: kwriteconfig6 --file powerdevilrc --group AC --group Display --key TurnOffDisplayIdleTimeoutSec 2700
+      become: false
+      changed_when: false
+
+    - name: Reload systemd --user units
+      ansible.builtin.systemd:
+        scope: user
+        daemon_reload: true
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+
+    - name: Enable and start dpms-sleep-fix.service
+      ansible.builtin.systemd:
+        scope: user
+        name: dpms-sleep-fix.service
+        enabled: true
+        state: started
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+
+    - name: Restart powerdevil to pick up drop-ins and settings (only if something changed)
+      ansible.builtin.systemd:
+        scope: user
+        name: plasma-powerdevil.service
+        state: restarted
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+      when: dpms_powerdevil_dropins.changed

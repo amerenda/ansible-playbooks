@@ -1,0 +1,12 @@
+[Unit]
+Description=Correct powerdevil's post-DPMS-off display-redetection wake bug
+After=plasma-powerdevil.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dpms-sleep-fix.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
