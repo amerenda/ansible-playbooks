@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep the couch-TV output enabled (blanked) so KWin's enabled-output count never hits zero
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/output-topology-guard.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# output-topology-guard.sh (deployed by roles/kde-plasma)
+#
+# Root-cause fix for "monitor sleeps then instantly wakes" (2026-08-22
+# investigation). KWin has a bug where, if its enabled-output count ever
+# hits zero, it force-restores every output as DPMS-On the moment any
+# output reappears (see the KDE community's reports of this same failure
+# mode on other dual-output AMDGPU/Wayland setups). On this box, the couch
+# TV output ({{ dpms_sleep_fix_couch_connector }}) is fully `disable`d
+# whenever joystick-notify is in desk mode -- so the desk monitor
+# ({{ dpms_sleep_fix_drm_card }}-{{ dpms_sleep_fix_desk_connector }}) is the
+# *only* enabled output, and DPMS-off on it alone drops the enabled-output
+# count to zero, tripping the bug.
+#
+# Confirmed via live testing: keeping the TV output enabled (as a
+# non-primary, priority-2 output -- it stays blanked/unused, nothing
+# visibly changes) means the enabled-output count never reaches zero, and
+# DPMS-off on the desk monitor holds indefinitely.
+#
+# This does NOT modify joystick-notify or its force-desk-primary.sh (which
+# is the thing that disables the TV output in the first place) -- it's a
+# separate, independent corrective pass that just re-enables the TV output
+# shortly after, whenever it finds it disabled. Deliberately cheap and
+# infrequent (checks output topology, not DPMS state, every 15s) since
+# topology only changes on login or couch/desk transitions -- unlike the
+# earlier DPMS-reassert approach this replaces, this never touches the
+# desk monitor's own DPMS state and so cannot cause visible flicker.
+export XDG_RUNTIME_DIR=/run/user/{{ cachyos_user_uid }}
+export WAYLAND_DISPLAY=wayland-0
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ cachyos_user_uid }}/bus
+
+COUCH_CONNECTOR="{{ dpms_sleep_fix_couch_connector }}"
+
+while true; do
+    sleep 15
+    state=$(kscreen-doctor -o 2>/dev/null | awk -v c="$COUCH_CONNECTOR" '
+        $0 ~ "Output: .*"c { found=1; next }
+        found && /enabled|disabled/ { print $1; exit }
+    ')
+    if [ "$state" = "disabled" ]; then
+        kscreen-doctor "output.${COUCH_CONNECTOR}.enable" "output.${COUCH_CONNECTOR}.priority.2" >/dev/null 2>&1
+    fi
+done

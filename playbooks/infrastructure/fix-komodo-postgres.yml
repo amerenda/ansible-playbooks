@@ -1,0 +1,59 @@
+---
+# Fix: stale komodo-postgres-1 network endpoint in komodo_komodo-net
+#
+# The komodo-postgres-1 container (FerretDB's postgres-documentdb backend)
+# disappeared from Docker but left a stale endpoint in the komodo_komodo-net
+# bridge network. This prevents `docker compose up` from recreating the container.
+#
+# Run:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/fix-komodo-postgres.yml
+
+- name: Fix stale komodo-postgres network endpoint
+  hosts: macmini_hosts
+  gather_facts: no
+
+  vars:
+    docker: "/Users/{{ ansible_user }}/.orbstack/bin/docker"
+    compose_file: "/Users/{{ ansible_user }}/komodo-dean-gitops/mac-mini-m4/komodo/compose.yaml"
+    network: komodo_komodo-net
+    container: komodo-postgres-1
+
+  tasks:
+    - name: Disconnect stale network endpoint (ignore errors if already clean)
+      command: "{{ docker }} network disconnect --force {{ network }} {{ container }}"
+      ignore_errors: true
+
+    - name: Bring komodo stack up (recreates postgres container)
+      command: >
+        {{ docker }} compose -f {{ compose_file }} up -d --remove-orphans
+      register: compose_result
+
+    - name: Show compose output
+      debug:
+        msg: "{{ compose_result.stdout_lines + compose_result.stderr_lines }}"
+
+    - name: Wait for komodo-postgres-1 to be running
+      command: "{{ docker }} inspect -f '{{ '{{' }}.State.Running{{ '}}' }}' {{ container }}"
+      register: ps_check
+      until: ps_check.stdout | trim == 'true'
+      retries: 15
+      delay: 5
+
+    - name: Check FerretDB health
+      command: "{{ docker }} inspect -f '{{ '{{' }}.State.Health.Status{{ '}}' }}' komodo-ferretdb-1"
+      register: ferretdb_health
+      until: ferretdb_health.stdout | trim == 'healthy'
+      retries: 24
+      delay: 5
+      ignore_errors: true
+
+    - name: Report final status
+      command: >
+        {{ docker }} ps --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}"
+        --filter name=komodo
+      register: final_status
+
+    - name: Show container status
+      debug:
+        msg: "{{ final_status.stdout_lines }}"

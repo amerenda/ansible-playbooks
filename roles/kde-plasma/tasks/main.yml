@@ -88,35 +88,77 @@
 
 # ── DPMS sleep fix ─────────────────────────────────────────────────────────
 #
-# Confirmed root causes (2026-08-22 investigation, see the joystick-notify
-# repo's plans/ for the incident writeup) of "monitor sleeps then instantly
-# wakes":
+# Confirmed root causes (2026-08-22 investigation) of "monitor sleeps then
+# instantly wakes":
 #
-# 1) A KDE/powerdevil bug: powerdevil's own post-DPMS-off display
-#    re-detection cycle resets brightness via the KWin backend, which wakes
-#    the display back up. ddcutil's recently_resumed_from_sleep_by_clocktime
-#    false-positive is one confirmed trigger -- disabling ddcutil
-#    (powerdevil-no-ddcutil.conf) removes that trigger. What's left is
-#    corrected by dpms-sleep-fix.service, which watches for the DPMS-off
-#    log event and re-asserts DPMS-off for 60s (the redetection can fire
-#    more than once per idle-off event).
+# 1) A real KWin bug (matches reports from other AMDGPU/Wayland dual-output
+#    users, e.g. r/kde "Wayland KWin constantly waking monitor from sleep"):
+#    if KWin's *enabled-output count* ever drops to zero, it force-restores
+#    every output as DPMS-On the moment any output reappears. On this box,
+#    joystick-notify's force-desk-primary.sh fully `disable`s the couch TV
+#    output whenever we're in desk mode -- so the desk monitor is the only
+#    enabled output, and DPMS-off on it alone drops the count to zero,
+#    tripping the bug. Confirmed live: with only the desk monitor enabled,
+#    every DPMS-off woke itself back up within 5-20s; with the TV output
+#    also kept enabled (blanked, non-primary, priority 2), a DPMS-off held
+#    for 4+ minutes with none of the "no outputs - creating placeholder
+#    screen" / redetection log lines that preceded every previous wake.
 #
-# 2) A config bug that was making (1) worse: DimDisplayIdleTimeoutSec was
-#    set to 2147483647 (INT32_MAX seconds) to mean "never dim", but
-#    powerdevil converts this to milliseconds internally, overflowing
-#    32-bit int range and producing "KIdleTime::addIdleTimeout: invalid
-#    timeout: -1000" in the log -- which was driving a continuous ~10s
-#    output-redetection storm independent of any real DPMS event. 0 is the
-#    correct "disabled" sentinel for this field, not INT32_MAX.
+#    output-topology-guard.service is the fix: it does NOT touch DPMS state
+#    (so it cannot cause the flicker an earlier reactive DPMS-reassert
+#    attempt did -- see git history for that dead end). It only watches
+#    output *topology* every 15s and re-enables the TV output if it finds
+#    it disabled. Topology only changes on login or couch/desk mode
+#    switches, not on every idle cycle, so this fires rarely. It
+#    deliberately does not modify joystick-notify or force-desk-primary.sh
+#    (which is what disables the TV output in the first place) -- it's a
+#    separate, independent corrective pass layered on top.
+#
+# 2) A config bug that was making (1) look worse than it needed to:
+#    DimDisplayIdleTimeoutSec was set to 2147483647 (INT32_MAX seconds) to
+#    mean "never dim", but powerdevil converts this to milliseconds
+#    internally, overflowing 32-bit int range and producing
+#    "KIdleTime::addIdleTimeout: invalid timeout: -1000" in the log --
+#    which was driving a continuous ~10s output-redetection storm
+#    independent of any real DPMS event. 0 is the correct "disabled"
+#    sentinel for this field, not INT32_MAX.
+#
+# POWERDEVIL_NO_DDCUTIL=1 (no-ddcutil.conf) is kept as defense-in-depth: a
+# separate, real, documented powerdevil bug (ddcutil's
+# recently_resumed_from_sleep_by_clocktime false-positive) that's a-priori
+# unrelated to (1) but harmless to disable and removes one more thing that
+# can reset brightness/wake a display after DPMS-off.
 
 - name: DPMS sleep fix (only on hosts with dpms_sleep_fix_desk_connector set, e.g. archlinux)
   when: dpms_sleep_fix_desk_connector is defined
   tags: [kde, dpms-sleep-fix]
   block:
-    - name: Deploy dpms-sleep-fix.sh
+    - name: Remove earlier dead-end fix (dpms-sleep-fix.sh reactive DPMS-reassert loop)
+      ansible.builtin.systemd:
+        scope: user
+        name: dpms-sleep-fix.service
+        state: stopped
+        enabled: false
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+      failed_when: false
+
+    - name: Remove earlier dead-end fix files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ cachyos_user_home }}/.config/systemd/user/dpms-sleep-fix.service"
+        - "{{ cachyos_user_home }}/.config/systemd/user/graphical-session.target.wants/dpms-sleep-fix.service"
+        - "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d/debug-logging.conf"
+        - /usr/local/bin/dpms-sleep-fix.sh
+
+    - name: Deploy output-topology-guard.sh
       ansible.builtin.template:
-        src: dpms-sleep-fix.sh.j2
-        dest: /usr/local/bin/dpms-sleep-fix.sh
+        src: output-topology-guard.sh.j2
+        dest: /usr/local/bin/output-topology-guard.sh
         owner: root
         group: root
         mode: "0755"
@@ -130,23 +172,20 @@
         mode: "0755"
       become: false
 
-    - name: Deploy plasma-powerdevil.service.d drop-ins (no-ddcutil, debug-logging)
+    - name: Deploy plasma-powerdevil.service.d drop-in (no-ddcutil)
       ansible.builtin.copy:
-        src: "{{ item.src }}"
-        dest: "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d/{{ item.dest }}"
+        src: powerdevil-no-ddcutil.conf
+        dest: "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d/no-ddcutil.conf"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: "0644"
-      loop:
-        - { src: powerdevil-no-ddcutil.conf, dest: no-ddcutil.conf }
-        - { src: powerdevil-debug-logging.conf, dest: debug-logging.conf }
       become: false
       register: dpms_powerdevil_dropins
 
-    - name: Deploy dpms-sleep-fix.service (systemd --user unit)
+    - name: Deploy output-topology-guard.service (systemd --user unit)
       ansible.builtin.copy:
-        src: dpms-sleep-fix.service
-        dest: "{{ cachyos_user_home }}/.config/systemd/user/dpms-sleep-fix.service"
+        src: output-topology-guard.service
+        dest: "{{ cachyos_user_home }}/.config/systemd/user/output-topology-guard.service"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: "0644"
@@ -171,10 +210,10 @@
         XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
         DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
 
-    - name: Enable and start dpms-sleep-fix.service
+    - name: Enable and start output-topology-guard.service
       ansible.builtin.systemd:
         scope: user
-        name: dpms-sleep-fix.service
+        name: output-topology-guard.service
         enabled: true
         state: started
       become: false
