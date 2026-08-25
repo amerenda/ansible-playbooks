@@ -18,5 +18,21 @@
 # for any wakeup event from its children, no matter how the children
 # themselves are configured. Confirmed via journal: the box only ever
 # woke from suspend via the physical power button, never via input.
+#
+# 2026-08-25 correction: enabling wakeup on the hub fixed real input but also
+# opened the path for the mouse receiver's own chatter to wake the system.
+# Confirmed via /sys/kernel/debug/wakeup_sources: after the 08-24 fix, the
+# box self-woke from suspend after ~8-9 seconds four times overnight, each
+# restarting powerdevil's 2h idle timer (looked like "unresponsive, needed a
+# button press" — it wasn't failing to wake, it was waking itself constantly).
+# hidpp_battery_0 (the Unifying receiver's HID++ battery/status channel,
+# 046d:c547) had accumulated 203 wakeup events vs. 1 clean event each for the
+# keyboard and the mouse's real HID interface — the receiver's own periodic
+# telemetry, not user input, was the actual wake source. The keyboard
+# (2f68:0082, wired, no telemetry channel) shows no equivalent chatter.
+# Disabling wakeup on just the receiver (leaving the hub and keyboard
+# enabled) trades away mouse-click wake for a suspend that reliably stays
+# asleep and still wakes on keyboard input.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/control", ATTR{power/control}="on"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="046d", ATTR{idProduct}=="c547", TEST=="power/wakeup", ATTR{power/wakeup}="disabled"
