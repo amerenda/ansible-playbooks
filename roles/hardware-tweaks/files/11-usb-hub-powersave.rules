@@ -6,4 +6,17 @@
 # movement, but a perceptible stutter during slow/precise movement, since
 # the natural pauses between micro-movements were enough to let the hub
 # suspend, and each resume added a hitch before input reached the host.
+#
+# Also enables USB remote-wakeup on the hub itself. 2026-08-24: found that
+# system suspend was not waking on keyboard/mouse input at all — the
+# keyboard (1-13.4) and mouse dongle (1-13.1) both already had
+# power/wakeup=enabled (kernel default for HID-class devices), but their
+# parent hub (1-13, this device) had power/wakeup=disabled. Linux's USB
+# remote-wakeup signal has to propagate up through every ancestor hub to
+# reach the xHCI controller (already an enabled ACPI wake source, see
+# 99-bluetooth-wakeup.rules) — a hub with wakeup disabled is a dead end
+# for any wakeup event from its children, no matter how the children
+# themselves are configured. Confirmed via journal: the box only ever
+# woke from suspend via the physical power button, never via input.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
