@@ -3,3 +3,10 @@
 # Host vars merge reliably for ansible_connection=local; group_vars/archlinux_k3s.yml mirrors these.
 longhorn_host_disk_path: /mnt/storage/longhorn
 longhorn_k8s_namespace: default
+
+# Which DRM card/connector the desk monitor is wired to (see
+# roles/kde-plasma's dpms-sleep-fix task) -- genuinely host-specific,
+# depends on which physical GPU output the monitor's cable is in.
+dpms_sleep_fix_drm_card: card1
+dpms_sleep_fix_desk_connector: HDMI-A-2
+dpms_sleep_fix_couch_connector: HDMI-A-1
