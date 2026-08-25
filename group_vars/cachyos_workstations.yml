@@ -98,6 +98,8 @@ cachyos_pacman_packages:
   - docker
   - docker-compose
   - docker-buildx
+  # WinBoat (run Windows apps via Docker+KVM+FreeRDP; requires KVM in BIOS/UEFI)
+  - freerdp
   - kubectl
   - helm
   - terraform
@@ -142,6 +144,7 @@ cachyos_aur_packages:
   - proton-ge-custom-bin
   - game-devices-udev
   - moondeckbuddy-appimage
+  - winboat-bin
 
 # ── Services ──────────────────────────────────────────────────────────────────
 
@@ -176,6 +179,14 @@ cachyos_dotfiles_dest: "{{ cachyos_user_home }}/projects/dotfiles"
 # ── Joystick-notify source (local path on the Ansible control node) ───────────
 
 cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
+
+# ── Power management (KDE / powerdevil) ────────────────────────────────────────
+
+kde_display_off_idle_timeout_sec: 600
+kde_display_off_idle_timeout_locked_sec: 300
+# How often to defensively restart powerdevil to clear stale DDC/CI
+# display-watch state (see roles/kde-plasma/tasks/main.yml for why).
+kde_powerdevil_refresh_interval: "4h"
 
 # ── ROCm ──────────────────────────────────────────────────────────────────────
 

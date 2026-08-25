@@ -3,6 +3,18 @@
 # AUR desktop applications: VSCode, Cursor, Dropbox, NordPass, NordVPN, amdgpu_top.
 # Firefox and Bitwarden are in cachyos_pacman_packages (installed by common role).
 
+- name: Check KVM is available (required by WinBoat; enabled in BIOS/UEFI, not installable)
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: desktop_apps_kvm_check
+  tags: [desktop-apps, aur, winboat]
+
+- name: Warn if KVM is unavailable (WinBoat will not work until virtualization is enabled in BIOS/UEFI)
+  ansible.builtin.debug:
+    msg: "WARNING: /dev/kvm not found. WinBoat requires KVM virtualization enabled in BIOS/UEFI — enable it, then re-run this role."
+  when: not desktop_apps_kvm_check.stat.exists
+  tags: [desktop-apps, aur, winboat]
+
 - name: Install AUR desktop applications
   ansible.builtin.shell: |
     set -euo pipefail

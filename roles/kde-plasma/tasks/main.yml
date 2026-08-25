@@ -231,3 +231,146 @@
         XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
         DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
       when: dpms_powerdevil_dropins.changed
+
+# ── Power management (screen-off timer) ─────────────────────────────────────
+#
+# Codifies the "turn the monitor off after N minutes idle" setting so it
+# survives a reinstall instead of only existing as live, untracked state in
+# ~/.config/powerdevilrc. Values come from group_vars so they're tunable per
+# host without editing this role.
+#
+# Skipped on hosts covered by the DPMS sleep fix block above (archlinux):
+# that block already owns TurnOffDisplayIdleTimeoutSec (set to 45min, the
+# value the 2026-08-22 investigation confirmed avoids the KWin zero-output
+# wake bug) and DimDisplayIdleTimeoutSec (the INT32_MAX overflow fix). Two
+# independent kwriteconfig6 tasks both writing this file would just race to
+# decide the final value on every run.
+
+- name: Configure display power-off idle timeouts via kwriteconfig6
+  when: dpms_sleep_fix_desk_connector is not defined
+  ansible.builtin.shell: |
+    kwriteconfig6 --file powerdevilrc --group "AC][Display" --key TurnOffDisplayIdleTimeoutSec {{ kde_display_off_idle_timeout_sec }}
+    kwriteconfig6 --file powerdevilrc --group "AC][Display" --key TurnOffDisplayIdleTimeoutWhenLockedSec {{ kde_display_off_idle_timeout_locked_sec }}
+  become: false
+  args:
+    executable: /bin/bash
+  changed_when: false
+  notify: Restart powerdevil
+  tags: [kde, power]
+
+# ── Powerdevil self-heal (periodic refresh) ──────────────────────────────────
+#
+# Powerdevil tracks connected displays via libddcutil/DDC-CI polling to drive
+# its idle-timeout screen-off feature. Repeated output enable/disable cycles
+# (e.g. joystick-notify's couch<->desk display switching, or manual
+# `kscreen-doctor` testing) have been observed to leave that internal
+# display-watch state confused, silently breaking the screen-off timeout
+# until powerdevil is restarted — the config above stays correct throughout,
+# only the running daemon's tracking drifts. This periodic timer is a cheap,
+# low-risk defensive restart (observed to take ~3s with no visible session
+# disruption) rather than trying to detect the drift itself. Skips the
+# restart while joystick-notify's couch-mode session is active (checked via
+# its owner-lock file) purely out of caution, even though a powerdevil
+# restart has not been observed to disrupt an active session.
+
+- name: Ensure user systemd directory exists (for powerdevil-refresh timer)
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: false
+  tags: [kde, power]
+
+- name: Install powerdevil-refresh.service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Restart Powerdevil to clear stale DDC/CI display-watch state (see roles/kde-plasma)
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/bash -c '[ -e /tmp/joystick-notify/locks/owner.lock ] && exit 0; exec systemctl --user restart plasma-powerdevil.service'
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.service"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  notify: Reload user systemd daemon
+  tags: [kde, power]
+
+- name: Install powerdevil-refresh.timer
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Periodic Powerdevil refresh (see powerdevil-refresh.service)
+
+      [Timer]
+      OnBootSec=15min
+      OnUnitActiveSec={{ kde_powerdevil_refresh_interval }}
+      AccuracySec=5min
+
+      [Install]
+      WantedBy=timers.target
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.timer"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: false
+  notify: Reload user systemd daemon
+  tags: [kde, power]
+
+- name: Enable powerdevil-refresh.timer
+  ansible.builtin.systemd:
+    name: powerdevil-refresh.timer
+    enabled: true
+    state: started
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [kde, power]
+
+# ── USB remote-wakeup (wake from suspend via Bluetooth adapter) ─────────────
+#
+# By default the kernel leaves USB remote-wakeup disabled for most devices.
+# The xHCI host controller (0000:00:14.0) is already an enabled ACPI wake
+# source (see `cat /proc/acpi/wakeup`) — the missing piece is enabling
+# wakeup on the Bluetooth adapter itself so a paired device's activity can
+# signal the (already wake-capable) host controller to resume.
+#
+# Matched generically by USB device class (0xe0/0x01/0x01 = Wireless
+# Controller / RF Controller / Bluetooth), not by vendor/product ID, so this
+# rule keeps working if the adapter is ever swapped for a different model —
+# same principle as the vendor/name-based matching used for controller
+# detection in the joystick-notify repo.
+#
+# Note: this only covers a true Bluetooth-paired controller. The Steam
+# Controller's USB "Puck" receiver already reports power/wakeup=enabled by
+# default (confirmed on this host) with no rule needed — Valve's receiver
+# firmware supports remote-wakeup out of the box, which is a known,
+# intentional feature distinct from the hotplug-notification gap that
+# joystick-notify's controller-liveness-watch.py works around.
+
+- name: Install udev rule enabling USB remote-wakeup on Bluetooth adapters
+  ansible.builtin.copy:
+    content: |
+      # Enable USB remote-wakeup for any Bluetooth adapter (matched by USB
+      # device class, not vendor/product ID) so a paired device's activity
+      # can wake the host from suspend via the xHCI controller.
+      # Installed by roles/kde-plasma (see tasks/main.yml).
+      ACTION=="add", SUBSYSTEM=="usb", ATTR{bDeviceClass}=="e0", ATTR{bDeviceSubClass}=="01", ATTR{bDeviceProtocol}=="01", ATTR{power/wakeup}="enabled"
+    dest: /etc/udev/rules.d/99-bluetooth-wakeup.rules
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kde, power, bluetooth]
+
+- name: Apply udev rule immediately (re-trigger existing Bluetooth USB devices)
+  ansible.builtin.shell: |
+    udevadm control --reload-rules
+    udevadm trigger --action=add --subsystem-match=usb
+  changed_when: false
+  tags: [kde, power, bluetooth]
