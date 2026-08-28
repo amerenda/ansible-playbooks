@@ -155,6 +155,34 @@
         - "{{ cachyos_user_home }}/.config/systemd/user/plasma-powerdevil.service.d/debug-logging.conf"
         - /usr/local/bin/dpms-sleep-fix.sh
 
+    # 2026-08-27: found an even older, never-ansible-tracked enforcer
+    # (predates this whole DPMS block) still installed and still firing on
+    # every graphical session start. It force-writes its own hardcoded
+    # powerdevilrc -- including DimDisplayIdleTimeoutSec=2147483647, the
+    # exact INT32_MAX overflow bug root-caused and fixed above -- silently
+    # undoing this role's kwriteconfig6 tasks below on every login. This is
+    # what brought the monitor-sleep bug back after PR #69 already fixed it.
+    - name: Stop and disable stale powerdevil-settings-enforce.service
+      ansible.builtin.systemd:
+        scope: user
+        name: powerdevil-settings-enforce.service
+        state: stopped
+        enabled: false
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+      failed_when: false
+
+    - name: Remove stale powerdevil-settings-enforce files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-settings-enforce.service"
+        - "{{ cachyos_user_home }}/.config/systemd/user/graphical-session.target.wants/powerdevil-settings-enforce.service"
+        - /usr/local/bin/powerdevil-settings-enforce.sh
+
     - name: Deploy output-topology-guard.sh
       ansible.builtin.template:
         src: output-topology-guard.sh.j2
