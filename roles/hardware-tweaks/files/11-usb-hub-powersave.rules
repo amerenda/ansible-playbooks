@@ -33,6 +33,18 @@
 # Disabling wakeup on just the receiver (leaving the hub and keyboard
 # enabled) trades away mouse-click wake for a suspend that reliably stays
 # asleep and still wakes on keyboard input.
+#
+# 2026-08-28 REVERTED: this hub is a KVM switch (confirmed with Alex), not a
+# plain peripheral hub -- the "keyboard"/"mouse" behind it are the switch's
+# own USB presentation, not direct devices. With hub wakeup=enabled, Alex
+# reported the screen going black on essentially every touch of the
+# keyboard/mouse during normal (non-suspended) use -- strong circumstantial
+# fit for the KVM switch reacting to wakeup/reset signaling by hiccupping
+# its video pass-through too. Reverting hub wakeup to disabled trades away
+# wake-from-suspend-via-keyboard (the point of the 08-24 fix) for a switch
+# that doesn't glitch the display during active use, which is the only
+# acceptable side. TEST==power/wakeup dropped since the target is now
+# default/disabled and this device shouldn't be setting the attribute at
+# all; the ATTR{power/control}="on" line (autosuspend fix, unrelated) stays.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/control", ATTR{power/control}="on"
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2586", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="046d", ATTR{idProduct}=="c547", TEST=="power/wakeup", ATTR{power/wakeup}="disabled"
