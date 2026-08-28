@@ -33,11 +33,17 @@ COUCH_CONNECTOR="{{ dpms_sleep_fix_couch_connector }}"
 
 while true; do
     sleep 15
-    state=$(kscreen-doctor -o 2>/dev/null | awk -v c="$COUCH_CONNECTOR" '
-        $0 ~ "Output: .*"c { found=1; next }
-        found && /enabled|disabled/ { print $1; exit }
-    ')
-    if [ "$state" = "disabled" ]; then
+    # kscreen-doctor -o always emits ANSI color codes, even when piped to a
+    # non-tty -- an earlier version of this script parsed that colored text
+    # output with awk, so `state` was actually "\e[01;31mdisabled\e[0;0m",
+    # which never equals the literal string "disabled". That made this
+    # entire guard a silent no-op from the day it was deployed (2026-08-22)
+    # until this was found and fixed (2026-08-28) via live testing showing
+    # the couch output stuck disabled for 16+ hours despite the service
+    # reporting "active (running)" the whole time. -j (JSON) has no color
+    # codes, so this comparison is real now.
+    enabled=$(kscreen-doctor -j 2>/dev/null | jq -r --arg c "$COUCH_CONNECTOR" '.outputs[] | select(.name == $c) | .enabled')
+    if [ "$enabled" = "false" ]; then
         # position.5000,0 is required -- without an explicit position this
         # output lands at the default 0,0, directly overlapping the desk
         # monitor (also at 0,0) with a different resolution. Confirmed
