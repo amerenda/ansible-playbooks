@@ -190,6 +190,10 @@ ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-debia
 # Inotify sysctl tuning for k3s + GPU agent nodes
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/sysctl-tuning.yml
 
+# Pin a host's current DHCP-leased IP as static (dhcpcd/netplan/NetworkManager
+# auto-detected). Targets the `laptop` host by default (10.100.20.132).
+ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/set-static-ip.yml
+
 # Komodo Periphery on archlinux (Docker, BWS, compose.env, force-recreate Periphery, media dirs)
 # First run: pass token. Re-runs: omit token if /etc/komodo/.bws-secret already exists.
 ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/setup-archlinux-komodo.yml \
@@ -230,6 +234,7 @@ for `computers` / workstation lists in `group_vars/computers.yml` and re-run the
 | `setup-archlinux-komodo.yml` | Docker, `bws`, Periphery on `:8120`; `compose.env` from BWS (trimmed passkey); **`docker compose ... --force-recreate`** each run; media dirs | `archlinux_komodo_hosts` (+ `group_vars/computers.yml`); first run needs `-e bws_access_token`, later re-runs optional if `/etc/komodo/.bws-secret` exists |
 | `setup-debian-komodo.yml` | Murderbot (Debian): Docker + Periphery + `compose.env` from BWS; force-recreates Periphery on re-run (same passkey hygiene as Arch) | Group `murderbot_komodo_hosts`; token like `setup-archlinux-komodo` |
 | `sysctl-tuning.yml` | Raises inotify limits on `k3s` + `gpu_k3s` hosts for many pods/watchers | Non-disruptive; see playbook for `--limit` |
+| `set-static-ip.yml` | Pins a host's current DHCP address as static; auto-detects dhcpcd/netplan/NetworkManager, uses the real active connection profile (not a guessed name) | Targets `laptop` by default; brief reconnect blip when the NetworkManager profile comes back up |
 | `smoke-test.yml` | Validates nodes, etcd, tmpfs, snapshots, Longhorn, ArgoCD | Read-only, safe anytime |
 
 ### Applications
