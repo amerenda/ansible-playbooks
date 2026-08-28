@@ -15,6 +15,21 @@
   when: not desktop_apps_kvm_check.stat.exists
   tags: [desktop-apps, aur, winboat]
 
+# 2026-08-28: WinBoat's Windows VM container was found running continuously
+# (9 days uptime, ~28% CPU) despite nobody actively using it, and restarting
+# itself after a reboot even though its own docker restart-policy is
+# "on-failure" (not "always") -- something else, likely Plasma's session
+# restore relaunching the WinBoat GUI app, was starting it back up. Rather
+# than chase that exact relaunch mechanism, this task just converges the
+# container to stopped on every ansible run, which is enough to satisfy
+# "should not run unless Alex explicitly starts it".
+- name: Ensure WinBoat container is stopped (not needed unless explicitly launched)
+  ansible.builtin.command: /usr/bin/docker stop WinBoat
+  register: desktop_apps_winboat_stop
+  changed_when: "'WinBoat' in desktop_apps_winboat_stop.stdout"
+  failed_when: false
+  tags: [desktop-apps, winboat]
+
 - name: Install AUR desktop applications
   ansible.builtin.shell: |
     set -euo pipefail

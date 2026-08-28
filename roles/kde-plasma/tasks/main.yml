@@ -230,6 +230,23 @@
       become: false
       changed_when: false
 
+    # 2026-08-28: this host is excluded from the generic "Configure display
+    # power-off idle timeouts" task below (it owns TurnOffDisplayIdleTimeoutSec
+    # itself, see that task's `when`), but that task was the only thing that
+    # ever set TurnOffDisplayIdleTimeoutWhenLockedSec -- meaning this host's
+    # value (300s = 5min) was stale/unmanaged, left over from before that
+    # exclusion existed. Found live: with the compositor struggling (KWin
+    # logging "not processing events fast enough"), the display kept dropping
+    # back to black on every keystroke while at the lock screen, because
+    # 5min-locked kept re-triggering DPMS-off faster than the degraded
+    # compositor could reliably hold a wake. Bumped to 30min (group default,
+    # see kde_display_off_idle_timeout_locked_sec) so it stops retriggering
+    # during normal use.
+    - name: Set TurnOffDisplayIdleTimeoutWhenLockedSec
+      ansible.builtin.shell: kwriteconfig6 --file powerdevilrc --group AC --group Display --key TurnOffDisplayIdleTimeoutWhenLockedSec {{ kde_display_off_idle_timeout_locked_sec }}
+      become: false
+      changed_when: false
+
     - name: Reload systemd --user units
       ansible.builtin.systemd:
         scope: user
