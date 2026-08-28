@@ -286,79 +286,52 @@
   notify: Restart powerdevil
   tags: [kde, power]
 
-# ── Powerdevil self-heal (periodic refresh) ──────────────────────────────────
+# ── Powerdevil self-heal (RETIRED 2026-08-28) ────────────────────────────────
 #
-# Powerdevil tracks connected displays via libddcutil/DDC-CI polling to drive
-# its idle-timeout screen-off feature. Repeated output enable/disable cycles
-# (e.g. joystick-notify's couch<->desk display switching, or manual
-# `kscreen-doctor` testing) have been observed to leave that internal
-# display-watch state confused, silently breaking the screen-off timeout
-# until powerdevil is restarted — the config above stays correct throughout,
-# only the running daemon's tracking drifts. This periodic timer is a cheap,
-# low-risk defensive restart (observed to take ~3s with no visible session
-# disruption) rather than trying to detect the drift itself. Skips the
-# restart while joystick-notify's couch-mode session is active (checked via
-# its owner-lock file) purely out of caution, even though a powerdevil
-# restart has not been observed to disrupt an active session.
+# This used to be a blind `OnUnitActiveSec=4h` timer that force-restarted
+# powerdevil to clear stale DDC/CI display-watch state (a real but rare bug:
+# repeated output enable/disable cycles, e.g. joystick-notify's couch<->desk
+# switching, could leave powerdevil's internal display tracking confused,
+# breaking the screen-off timeout until restarted). The timer ran
+# unconditionally on wall-clock time with no idea whether the display was
+# currently, legitimately DPMS-off from real user idle.
+#
+# Retired after it turned out to BE the monitor-sleep bug it was guarding
+# against: on 2026-08-28 the timer fired at 03:00:22 (confirmed in journal),
+# restarted powerdevil, and the monitor was on when checked afterward, having
+# been correctly idle/off for hours beforehand. The restart re-inits
+# libddcutil regardless of POWERDEVIL_NO_DDCUTIL=1 (confirmed live:
+# `Starting libddcutil` logs on every restart even with the env var present
+# in the process's own environ) among other display-stack re-init side
+# effects of a full powerdevil restart -- any of which plausibly wakes a
+# DPMS-off display. Trading a rare, only-triggered-by-heavy-output-toggling
+# bug for a guaranteed nightly wake-up is the wrong direction. If the
+# original DDC-watch-drift bug resurfaces, the correct fix is triggering a
+# refresh from the actual couch<->desk switch event in joystick-notify, not
+# a blind wall-clock timer -- not implemented here, out of scope for this
+# role.
 
-- name: Ensure user systemd directory exists (for powerdevil-refresh timer)
-  ansible.builtin.file:
-    path: "{{ cachyos_user_home }}/.config/systemd/user"
-    state: directory
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0755"
-  become: false
-  tags: [kde, power]
-
-- name: Install powerdevil-refresh.service
-  ansible.builtin.copy:
-    content: |
-      [Unit]
-      Description=Restart Powerdevil to clear stale DDC/CI display-watch state (see roles/kde-plasma)
-
-      [Service]
-      Type=oneshot
-      ExecStart=/usr/bin/bash -c '[ -e /tmp/joystick-notify/locks/owner.lock ] && exit 0; exec systemctl --user restart plasma-powerdevil.service'
-    dest: "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.service"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0644"
-  become: false
-  notify: Reload user systemd daemon
-  tags: [kde, power]
-
-- name: Install powerdevil-refresh.timer
-  ansible.builtin.copy:
-    content: |
-      [Unit]
-      Description=Periodic Powerdevil refresh (see powerdevil-refresh.service)
-
-      [Timer]
-      OnBootSec=15min
-      OnUnitActiveSec={{ kde_powerdevil_refresh_interval }}
-      AccuracySec=5min
-
-      [Install]
-      WantedBy=timers.target
-    dest: "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.timer"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0644"
-  become: false
-  notify: Reload user systemd daemon
-  tags: [kde, power]
-
-- name: Enable powerdevil-refresh.timer
+- name: Stop and disable retired powerdevil-refresh.timer
   ansible.builtin.systemd:
-    name: powerdevil-refresh.timer
-    enabled: true
-    state: started
     scope: user
+    name: powerdevil-refresh.timer
+    state: stopped
+    enabled: false
   become: false
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  failed_when: false
+  tags: [kde, power]
+
+- name: Remove retired powerdevil-refresh timer/service files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.timer"
+    - "{{ cachyos_user_home }}/.config/systemd/user/powerdevil-refresh.service"
+    - "{{ cachyos_user_home }}/.config/systemd/user/timers.target.wants/powerdevil-refresh.timer"
   tags: [kde, power]
 
 # ── USB remote-wakeup (wake from suspend via Bluetooth adapter) ─────────────
