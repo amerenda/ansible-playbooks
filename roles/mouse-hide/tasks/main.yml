@@ -141,5 +141,5 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
-  changed_when: true
+  changed_when: false
   tags: [mouse-hide]
