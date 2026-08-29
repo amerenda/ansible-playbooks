@@ -81,14 +81,26 @@
   ansible.builtin.copy:
     content: |
       [Unit]
-      Description=Inject EDID override for HDMI-A-1 (TV/receiver presents no DDC at boot)
+      Description=Inject EDID override + force YUV420 for HDMI-A-1 (TV/receiver presents no DDC at boot; inline CEC dongle can't carry 4K60 at full chroma)
       After=sys-kernel-debug.mount systemd-udev-settle.service
 
       [Service]
       Type=oneshot
+      # force_yuv420_output: confirmed live 2026-08-29 -- the Pulse-Eight
+      # CEC dongle sitting inline in the video path (GPU -> dongle ->
+      # receiver -> TV) can't carry 3840x2160@60 at the driver's default
+      # (higher-bandwidth) chroma/bit-depth negotiation, even though the
+      # TV's own real EDID legitimately advertises 4K60 support -- the
+      # forced/injected EDID has no way to represent the dongle's own
+      # separate bandwidth ceiling. Forcing 4:2:0 chroma roughly halves
+      # required bandwidth and gets a real picture through at full
+      # resolution/refresh. Confirmed to persist across the daemon's own
+      # `udevadm trigger --action=change` connector rescans, so this only
+      # needs to be set once here, not re-applied per activation.
       ExecStart=/bin/sh -c '\
         cp /lib/firmware/edid/tv.bin /sys/kernel/debug/dri/1/HDMI-A-1/edid_override && \
         echo on > /sys/kernel/debug/dri/1/HDMI-A-1/force && \
+        echo 1 > /sys/kernel/debug/dri/1/HDMI-A-1/force_yuv420_output && \
         echo 1 > /sys/kernel/debug/dri/1/HDMI-A-1/trigger_hotplug'
       RemainAfterExit=yes
 
