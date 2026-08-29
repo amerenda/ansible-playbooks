@@ -1,221 +1,58 @@
 ---
 # Role: joystick-notify
 # Controller-driven couch mode automation for KDE Plasma.
-# Sources from local joystick-notify repo on the Ansible control node.
+# Installed as a real package (packaging/PKGBUILD, makepkg -si) built from a
+# fresh clone of the joystick-notify repo's main branch on the target host —
+# same pattern the sunshine role uses for its AUR install. Ships exactly two
+# systemd user units: joystick-notify.service (daemon) and
+# joystick-notify-tray.service (tray icon).
 
-- name: Ensure /usr/local/lib/joystick-notify exists
-  ansible.builtin.file:
-    path: /usr/local/lib/joystick-notify
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  tags: [joystick-notify]
+# ── Source ───────────────────────────────────────────────────────────────────
 
-# ── Scripts to /usr/local/bin/ ─────────────────────────────────────────────────
-
-- name: Install joystick-notify main scripts
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/scripts/{{ item }}"
-    dest: "/usr/local/bin/{{ item }}"
-    owner: root
-    group: root
-    mode: "0755"
-  loop:
-    - monitor-switcher.sh
-    - joystick-event.sh
-    - launch-bigpicture.sh
-    - game-wrapper.sh
-    - force-desk-primary.sh
-    - force-desk-primary-greeter.sh
-    - couch-switch.sh
-    - check-gpu-connectors.sh
-  tags: [joystick-notify, scripts]
-
-- name: Install joystick-notify sunshine support scripts
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/sunshine/{{ item }}"
-    dest: "/usr/local/bin/{{ item }}"
-    owner: root
-    group: root
-    mode: "0755"
-  loop:
-    - couch-mode-screen-unlock.sh
-    - sunshine-couch-prep.sh
-    - sunshine-couch-undo.sh
-  tags: [joystick-notify, scripts]
-
-- name: Install joystick-notify tray app
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-tray.py"
-    dest: /usr/local/bin/joystick-notify-tray
-    owner: root
-    group: root
-    mode: "0755"
-  tags: [joystick-notify, scripts]
-
-# ── Library files ──────────────────────────────────────────────────────────────
-
-- name: Install joystick-notify library shell scripts
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/lib/"
-    dest: /usr/local/lib/joystick-notify/
-    owner: root
-    group: root
-    mode: "0644"
-    directory_mode: "0755"
-  tags: [joystick-notify, lib]
-
-# ── tmpfiles.d ────────────────────────────────────────────────────────────────
-
-- name: Install tmpfiles.d for runtime directories
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/tmpfiles/joystick-notify.conf"
-    dest: /etc/tmpfiles.d/joystick-notify.conf
-    owner: root
-    group: root
-    mode: "0644"
-  tags: [joystick-notify, tmpfiles]
-
-- name: Apply tmpfiles.d immediately
-  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/joystick-notify.conf
-  changed_when: false
-  tags: [joystick-notify, tmpfiles]
-
-# ── udev rules ────────────────────────────────────────────────────────────────
-
-- name: Install joystick udev rule
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/udev/99-joystick-notify.rules"
-    dest: /etc/udev/rules.d/99-joystick-notify.rules
-    owner: root
-    group: root
-    mode: "0644"
-  tags: [joystick-notify, udev]
-
-- name: Install monitor hotplug udev rule (sed substitution)
-  ansible.builtin.shell: |
-    sed "s/__USER__/{{ cachyos_user }}/g" \
-      "{{ cachyos_joystick_notify_src }}/udev/98-monitor-hotplug.rules" \
-      > /etc/udev/rules.d/98-monitor-hotplug.rules
-    chmod 0644 /etc/udev/rules.d/98-monitor-hotplug.rules
-  args:
-    executable: /bin/bash
-  changed_when: false
-  failed_when: false
-  tags: [joystick-notify, udev]
-
-- name: Reload udev rules
-  ansible.builtin.command: udevadm control --reload-rules
-  changed_when: false
-  tags: [joystick-notify, udev]
-
-# ── sudoers rule (DRM rescan without password) ────────────────────────────────
-
-- name: Install joystick-notify sudoers rule
-  ansible.builtin.copy:
-    content: "{{ cachyos_user }} ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --action=change /sys/class/drm/*\n"
-    dest: /etc/sudoers.d/joystick-notify
-    owner: root
-    group: root
-    mode: "0440"
-    validate: visudo -cf %s
-  tags: [joystick-notify, sudoers]
-
-# ── Systemd system unit: pre-login (plasmalogin greeter) desk-primary ─────────
-#
-# force-desk-primary.service (below, systemd --user) and the
-# 98-monitor-hotplug.rules udev trigger only reach the desk user's own
-# logged-in Plasma session. The plasmalogin greeter runs its own separate
-# KWin/Wayland session before any login, so the couch/TV output (HDMI-A-1)
-# was never disabled for it - both outputs stay extended at the login
-# screen. Runs as User=plasmalogin so it can reach that user's own session
-# bus (DBus session buses reject cross-uid connections, even from root).
-
-- name: Install plasmalogin greeter desk-primary systemd system unit
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/systemd/plasmalogin-desk-primary.service"
-    dest: /etc/systemd/system/plasmalogin-desk-primary.service
-    owner: root
-    group: root
-    mode: "0644"
-  tags: [joystick-notify, service, greeter]
-
-- name: Reload system systemd daemon
-  ansible.builtin.systemd:
-    daemon_reload: true
-  tags: [joystick-notify, service, greeter]
-
-- name: Enable plasmalogin greeter desk-primary unit
-  ansible.builtin.systemd:
-    name: plasmalogin-desk-primary.service
-    enabled: true
-  tags: [joystick-notify, service, greeter]
-
-# ── Systemd user units ────────────────────────────────────────────────────────
-
-- name: Ensure user systemd directory exists
-  ansible.builtin.file:
-    path: "{{ cachyos_user_home }}/.config/systemd/user"
-    state: directory
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0755"
+- name: Clone/update joystick-notify source (main)
+  ansible.builtin.git:
+    repo: "{{ joystick_notify_repo }}"
+    dest: "{{ joystick_notify_src_dir }}"
+    version: main
+    force: false
   become: false
-  tags: [joystick-notify, service]
+  tags: [joystick-notify, build]
 
-- name: Install joystick-notify user systemd units
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/systemd/{{ item }}"
-    dest: "{{ cachyos_user_home }}/.config/systemd/user/{{ item }}"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0644"
+# ── Build + install (makepkg -si) ───────────────────────────────────────────
+
+- name: Build and install joystick-notify package
+  ansible.builtin.shell: |
+    set -euo pipefail
+    makepkg -si --noconfirm --needed
+  args:
+    chdir: "{{ joystick_notify_src_dir }}/packaging"
+    executable: /bin/bash
+  become: false
+  register: jn_makepkg_result
+  changed_when: "'-U ' in jn_makepkg_result.stdout or 'installing joystick-notify' in jn_makepkg_result.stdout or 'upgrading joystick-notify' in jn_makepkg_result.stdout"
+  tags: [joystick-notify, build]
+
+# ── Systemd user units (shipped by the package at /usr/lib/systemd/user/) ──
+# Earlier iterations (v1, and a stopgap hand-templated v2 unit) left
+# per-user overrides in ~/.config/systemd/user/, which systemd resolves
+# *ahead of* /usr/lib/systemd/user/ — meaning the package's real shipped
+# units would be silently shadowed by stale content. None of these v1
+# concepts (steam-shutdown path/service) exist in the v2 package at all.
+
+- name: Remove stale per-user systemd unit overrides
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/systemd/user/{{ item }}"
+    state: absent
   become: false
   loop:
     - joystick-notify.service
     - joystick-notify-tray.service
     - joystick-notify-steam-shutdown.service
-    - force-desk-primary.service
+    - joystick-notify-steam-shutdown.path
+  register: jn_stale_units_removed
   tags: [joystick-notify, service]
 
-- name: Install joystick-notify-steam-shutdown.path unit
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/systemd/joystick-notify-steam-shutdown.path"
-    dest: "{{ cachyos_user_home }}/.config/systemd/user/joystick-notify-steam-shutdown.path"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0644"
-  become: false
-  failed_when: false
-  tags: [joystick-notify, service]
-
-# ── Desktop entry ─────────────────────────────────────────────────────────────
-
-- name: Ensure ~/.local/share/applications exists
-  ansible.builtin.file:
-    path: "{{ cachyos_user_home }}/.local/share/applications"
-    state: directory
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0755"
-  become: false
-  tags: [joystick-notify, desktop]
-
-- name: Install tray desktop entry
-  ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/system-tray/joystick-notify-tray.desktop"
-    dest: "{{ cachyos_user_home }}/.local/share/applications/joystick-notify-tray.desktop"
-    owner: "{{ cachyos_user }}"
-    group: "{{ cachyos_user }}"
-    mode: "0644"
-  become: false
-  failed_when: false
-  tags: [joystick-notify, desktop]
-
-# ── Enable user services ──────────────────────────────────────────────────────
-
-- name: Enable user lingering so systemd user instance runs without active login
+- name: Ensure user lingering so systemd user instance runs without active login
   ansible.builtin.command: loginctl enable-linger {{ cachyos_user }}
   changed_when: false
   tags: [joystick-notify, service]
@@ -237,19 +74,135 @@
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [joystick-notify, service]
 
-- name: Enable joystick-notify user services
+- name: Enable joystick-notify.service
   ansible.builtin.systemd:
-    name: "{{ item }}"
+    name: joystick-notify.service
     enabled: true
-    state: started
+    state: "{{ 'restarted' if jn_stale_units_removed.changed else 'started' }}"
     scope: user
   become: false
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [joystick-notify, service, daemon]
+
+- name: Enable joystick-notify-tray.service
+  ansible.builtin.systemd:
+    name: joystick-notify-tray.service
+    enabled: true
+    state: "{{ 'restarted' if jn_stale_units_removed.changed else 'started' }}"
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  tags: [joystick-notify, service, tray]
+
+# ── CEC (pulse8-cec-attach) ──────────────────────────────────────────────────
+# pulse8-cec-attach@.service ships with the package (system scope) and is
+# started directly by udev via SYSTEMD_WANTS — it has no [Install] section,
+# so there's nothing to "enable"; it only needs to not be masked. It was
+# masked system-wide during the 2026-08-28 bisection
+# (/etc/systemd/system/pulse8-cec-attach@.service -> /dev/null) and never
+# unmasked, which is why /dev/cec0 has been missing since.
+
+- name: Unmask pulse8-cec-attach@.service
+  ansible.builtin.systemd:
+    name: pulse8-cec-attach@.service
+    masked: false
+  become: true
+  register: jn_cec_unmasked
+  tags: [joystick-notify, cec]
+
+- name: Retrigger udev tty add so the already-attached CEC adapter is picked up
+  ansible.builtin.command: udevadm trigger --action=add --subsystem-match=tty
+  become: true
+  when: jn_cec_unmasked.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+# cec0-configure.service (BindsTo=dev-cec0.device, no [Install]) does NOT
+# auto-start on its own -- it's only started because a udev rule sets
+# SYSTEMD_WANTS=cec0-configure.service when /dev/cec0 appears. Untracked v1
+# leftover rule files in /etc/udev/rules.d/ (no "joystick-notify-" filename
+# prefix, predating the v2 package) sort after the package's namespaced
+# 70-joystick-notify-cec-configure-autostart.rules and silently overwrite
+# SYSTEMD_WANTS with the old v1 template unit name
+# (cec0-configure@card1-HDMI-A-1.service, which no longer exists in v2 and
+# is masked dead weight) -- confirmed live 2026-08-29 via `udevadm info
+# /dev/cec0` showing the stale value, which left the adapter completely
+# unconfigured (`cec-ctl -S` reported phys addr f.f.f.f, no logical address
+# claimed) despite pulse8-cec-attach@ running fine.
+
+- name: Remove untracked v1 udev rule leftovers shadowing the packaged CEC rules
+  ansible.builtin.file:
+    path: "/etc/udev/rules.d/{{ item }}"
+    state: absent
+  become: true
   loop:
-    - joystick-notify.service
-    - joystick-notify-steam-shutdown.path
-    - joystick-notify-tray.service
-  failed_when: false
-  tags: [joystick-notify, service]
+    - cec-configure-autostart.rules
+    - pulse8-cec-autoattach.rules
+    - 98-cec-fixup.rules
+  register: jn_stale_udev_rules_removed
+  tags: [joystick-notify, cec]
+
+- name: Reload udev rules
+  ansible.builtin.command: udevadm control --reload-rules
+  become: true
+  when: jn_stale_udev_rules_removed.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+- name: Retrigger cec0 add so it picks up the corrected SYSTEMD_WANTS and actually configures
+  ansible.builtin.command: udevadm trigger --action=add --subsystem-match=cec
+  become: true
+  when: jn_stale_udev_rules_removed.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+# cec0-configure.service runs at system scope (triggered by udev, no login
+# session), so config.py's Path.home() resolves to /root, not the real
+# user's home -- it silently reads a nonexistent /root/.config/joystick-notify
+# config, gets schema defaults (cec.enabled=False), and exits early with
+# "CEC disabled or couch port not configured, skipping" even though the
+# real config.toml has cec.enabled=true and a couch_port set. Confirmed live
+# 2026-08-29: fixing the udev SYSTEMD_WANTS mismatch above made the service
+# actually run, but it still no-op'd until this override was added. A
+# systemd drop-in (not a packaging-level fix) because this HOME value is
+# host-specific -- the package itself stays single-user-agnostic.
+
+- name: Ensure cec0-configure.service.d drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/cec0-configure.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, cec]
+
+- name: Deploy cec0-configure.service.d HOME override
+  ansible.builtin.template:
+    src: cec0-configure-override.conf.j2
+    dest: /etc/systemd/system/cec0-configure.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: jn_cec0_configure_override
+  tags: [joystick-notify, cec]
+
+- name: Reload system systemd daemon (cec0-configure.service.d override)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: jn_cec0_configure_override.changed
+  tags: [joystick-notify, cec]
+
+- name: Re-run cec0-configure.service now that HOME is correct
+  ansible.builtin.systemd:
+    name: cec0-configure.service
+    state: restarted
+  become: true
+  when: jn_cec0_configure_override.changed
+  tags: [joystick-notify, cec]

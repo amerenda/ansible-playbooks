@@ -105,6 +105,7 @@
   ansible.builtin.systemd:
     name: hdmi-edid-override
     enabled: true
+    state: started
   tags: [hardware-tweaks, edid]
 
 # ── keyd config ────────────────────────────────────────────────────────────────
