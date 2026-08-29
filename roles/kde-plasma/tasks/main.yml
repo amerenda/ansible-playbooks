@@ -201,14 +201,21 @@
       become: false
       changed_when: false
 
-    # Lock session immediately on start via KDE's native kscreenlockerrc LockOnStart
-    # (https://wiki.archlinux.org/title/KDE#Lock_screen), the documented pairing for
-    # autologin. Replaces a hand-rolled lock-on-login.sh + autostart .desktop hack
-    # (sleep-based timing guess, manual loginctl/qdbus calls) that was deployed
-    # directly to archlinux outside ansible and has since been removed by hand
-    # (2026-08-28) — not re-added here since it can't come back on its own.
-    - name: Lock session immediately on start via kscreenlockerrc LockOnStart
-      ansible.builtin.shell: kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnStart true
+    # LockOnStart is KDE's native mechanism for "lock immediately on session start"
+    # (https://wiki.archlinux.org/title/KDE#Lock_screen) — it's only useful paired
+    # with autologin (skip the login screen, but re-lock immediately as the real
+    # security boundary). Autologin is currently disabled on archlinux (2026-08-28
+    # incident bisection), so LockOnStart is explicitly false here: with autologin
+    # off, the plasmalogin greeter is already a real password prompt, and turning
+    # this on too just stacks a second, redundant one on every login. Re-enable
+    # together with autologin, not independently.
+    #
+    # Replaces a hand-rolled lock-on-login.sh + autostart .desktop hack (sleep-based
+    # timing guess, manual loginctl/qdbus calls) that was deployed directly to
+    # archlinux outside ansible and has since been removed by hand (2026-08-28) —
+    # not re-added here since it can't come back on its own.
+    - name: Do not lock session on start (kscreenlockerrc LockOnStart) while autologin is off
+      ansible.builtin.shell: kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnStart false
       become: false
       changed_when: false
 
