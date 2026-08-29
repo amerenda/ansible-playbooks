@@ -86,9 +86,56 @@
   loop: "{{ mouse_hide_cursor_names }}"
   tags: [mouse-hide]
 
-- name: Apply cursor theme to the live Plasma session
+# kapplymousetheme refuses to run at all under Wayland (it hard-checks
+# KWindowSystem::isPlatformX11() and exits immediately) -- this session is
+# KWin/Wayland, so apply the same three effects by hand: kcminputrc governs
+# KWin's own compositor-drawn cursor (what Steam/Big Picture and everything
+# else actually shows, since KWin draws server-side for clients that don't
+# set a custom cursor), a DBus reconfigure makes it live without needing to
+# log out, and ~/.icons/default covers any GTK/SDL app that resolves the
+# cursor theme via the classic Xcursor "default" convention instead of
+# reading kcminputrc directly.
+
+- name: Set cursor theme in kcminputrc
+  community.general.ini_file:
+    path: "{{ cachyos_user_home }}/.config/kcminputrc"
+    section: Mouse
+    option: cursorTheme
+    value: "{{ mouse_hide_theme | default('invisible') }}"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Ensure ~/.icons/default exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.icons/default"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Point ~/.icons/default at the cursor theme (GTK/SDL/generic Xcursor apps)
+  ansible.builtin.copy:
+    content: |
+      [Icon Theme]
+      Inherits={{ mouse_hide_theme | default('invisible') }}
+    dest: "{{ cachyos_user_home }}/.icons/default/index.theme"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Tell KWin to reconfigure (applies the cursor theme live, no logout)
   ansible.builtin.command:
-    cmd: "kapplymousetheme {{ mouse_hide_theme | default('invisible') }}"
+    cmd: qdbus6 org.kde.KWin /KWin reconfigure
   become: true
   become_user: "{{ cachyos_user }}"
   environment:
