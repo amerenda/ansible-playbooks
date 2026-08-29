@@ -177,8 +177,16 @@ cachyos_dotfiles_repo: "git@github.com:amerenda/dotfiles.git"
 cachyos_dotfiles_dest: "{{ cachyos_user_home }}/projects/dotfiles"
 
 # ── Joystick-notify source (local path on the Ansible control node) ───────────
+# Still used by roles/sunshine for its couch-mode-screen-unlock.sh etc. —
+# TODO(Phase 2): those scripts moved into the joystick-notify package on
+# main and no longer exist at these paths; sunshine role needs updating.
 
 cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
+
+# joystick-notify package build — cloned fresh on the target host (main
+# branch) and built with makepkg, same pattern as the sunshine AUR install.
+joystick_notify_repo: "git@github.com:amerenda/joystick-notify.git"
+joystick_notify_src_dir: "{{ cachyos_user_home }}/joystick-notify-build"
 
 # ── Power management (KDE / powerdevil) ────────────────────────────────────────
 
