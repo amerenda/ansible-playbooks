@@ -201,6 +201,28 @@
       become: false
       changed_when: false
 
+    # Replaces a hand-rolled lock-on-login.sh + autostart .desktop hack (sleep-based
+    # timing guess, manual loginctl/qdbus calls) that was never tracked in this repo —
+    # it was deployed directly to the host outside ansible at some point. LockOnStart
+    # is KDE's own native mechanism for exactly this — see
+    # https://wiki.archlinux.org/title/KDE#Lock_screen. Paired with autologin so
+    # autostarted apps (Sunshine, joystick-notify, MoonDeckBuddy) can reach
+    # graphical-session.target without leaving an unlocked desktop for physical access.
+    - name: Remove hand-rolled lock-on-login.sh (superseded by native LockOnStart)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/lock-on-login.sh
+        - "{{ cachyos_user_home }}/.config/autostart/lock-on-login.desktop"
+        - "{{ cachyos_user_home }}/.config/autostart/lock-on-login.desktop.disabled"
+      become: true
+
+    - name: Lock session immediately on start via kscreenlockerrc LockOnStart
+      ansible.builtin.shell: kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnStart true
+      become: false
+      changed_when: false
+
     - name: Reload systemd --user units
       ansible.builtin.systemd:
         scope: user
