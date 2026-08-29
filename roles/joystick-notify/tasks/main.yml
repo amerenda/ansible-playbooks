@@ -97,3 +97,112 @@
     XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
   tags: [joystick-notify, service, tray]
+
+# ── CEC (pulse8-cec-attach) ──────────────────────────────────────────────────
+# pulse8-cec-attach@.service ships with the package (system scope) and is
+# started directly by udev via SYSTEMD_WANTS — it has no [Install] section,
+# so there's nothing to "enable"; it only needs to not be masked. It was
+# masked system-wide during the 2026-08-28 bisection
+# (/etc/systemd/system/pulse8-cec-attach@.service -> /dev/null) and never
+# unmasked, which is why /dev/cec0 has been missing since.
+
+- name: Unmask pulse8-cec-attach@.service
+  ansible.builtin.systemd:
+    name: pulse8-cec-attach@.service
+    masked: false
+  become: true
+  register: jn_cec_unmasked
+  tags: [joystick-notify, cec]
+
+- name: Retrigger udev tty add so the already-attached CEC adapter is picked up
+  ansible.builtin.command: udevadm trigger --action=add --subsystem-match=tty
+  become: true
+  when: jn_cec_unmasked.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+# cec0-configure.service (BindsTo=dev-cec0.device, no [Install]) does NOT
+# auto-start on its own -- it's only started because a udev rule sets
+# SYSTEMD_WANTS=cec0-configure.service when /dev/cec0 appears. Untracked v1
+# leftover rule files in /etc/udev/rules.d/ (no "joystick-notify-" filename
+# prefix, predating the v2 package) sort after the package's namespaced
+# 70-joystick-notify-cec-configure-autostart.rules and silently overwrite
+# SYSTEMD_WANTS with the old v1 template unit name
+# (cec0-configure@card1-HDMI-A-1.service, which no longer exists in v2 and
+# is masked dead weight) -- confirmed live 2026-08-29 via `udevadm info
+# /dev/cec0` showing the stale value, which left the adapter completely
+# unconfigured (`cec-ctl -S` reported phys addr f.f.f.f, no logical address
+# claimed) despite pulse8-cec-attach@ running fine.
+
+- name: Remove untracked v1 udev rule leftovers shadowing the packaged CEC rules
+  ansible.builtin.file:
+    path: "/etc/udev/rules.d/{{ item }}"
+    state: absent
+  become: true
+  loop:
+    - cec-configure-autostart.rules
+    - pulse8-cec-autoattach.rules
+    - 98-cec-fixup.rules
+  register: jn_stale_udev_rules_removed
+  tags: [joystick-notify, cec]
+
+- name: Reload udev rules
+  ansible.builtin.command: udevadm control --reload-rules
+  become: true
+  when: jn_stale_udev_rules_removed.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+- name: Retrigger cec0 add so it picks up the corrected SYSTEMD_WANTS and actually configures
+  ansible.builtin.command: udevadm trigger --action=add --subsystem-match=cec
+  become: true
+  when: jn_stale_udev_rules_removed.changed
+  changed_when: true
+  tags: [joystick-notify, cec]
+
+# cec0-configure.service runs at system scope (triggered by udev, no login
+# session), so config.py's Path.home() resolves to /root, not the real
+# user's home -- it silently reads a nonexistent /root/.config/joystick-notify
+# config, gets schema defaults (cec.enabled=False), and exits early with
+# "CEC disabled or couch port not configured, skipping" even though the
+# real config.toml has cec.enabled=true and a couch_port set. Confirmed live
+# 2026-08-29: fixing the udev SYSTEMD_WANTS mismatch above made the service
+# actually run, but it still no-op'd until this override was added. A
+# systemd drop-in (not a packaging-level fix) because this HOME value is
+# host-specific -- the package itself stays single-user-agnostic.
+
+- name: Ensure cec0-configure.service.d drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/cec0-configure.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, cec]
+
+- name: Deploy cec0-configure.service.d HOME override
+  ansible.builtin.template:
+    src: cec0-configure-override.conf.j2
+    dest: /etc/systemd/system/cec0-configure.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: jn_cec0_configure_override
+  tags: [joystick-notify, cec]
+
+- name: Reload system systemd daemon (cec0-configure.service.d override)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: jn_cec0_configure_override.changed
+  tags: [joystick-notify, cec]
+
+- name: Re-run cec0-configure.service now that HOME is correct
+  ansible.builtin.systemd:
+    name: cec0-configure.service
+    state: restarted
+  become: true
+  when: jn_cec0_configure_override.changed
+  tags: [joystick-notify, cec]
