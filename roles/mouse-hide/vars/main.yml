@@ -1,0 +1,82 @@
+---
+# 1x1 fully-transparent PNG, base64 -- the single source image for the
+# "invisible" Xcursor theme. Every standard cursor name symlinks to the one
+# compiled cursor built from this image, so no app-specific cursor (Steam,
+# Chromium/CEF overlay, Qt, GTK) ever has a visible pixel to show, regardless
+# of what re-triggers KDE's idle-based cursor-visibility timer.
+mouse_hide_transparent_png_b64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg=="
+
+# Every standard Xcursor/CSS cursor name gets symlinked to the one compiled
+# invisible cursor file -- covers core X names, CSS/GTK aliases, and Qt names
+# so nothing (Steam overlay, Big Picture, KWin itself) falls back to a themed
+# arrow for a name this list misses.
+mouse_hide_cursor_names:
+  - left_ptr
+  - left_ptr_watch
+  - default
+  - arrow
+  - top_left_arrow
+  - x-cursor
+  - xterm
+  - ibeam
+  - text
+  - hand1
+  - hand2
+  - hand
+  - pointer
+  - pointing_hand
+  - grab
+  - grabbing
+  - closedhand
+  - openhand
+  - move
+  - all-scroll
+  - fleur
+  - cross
+  - crosshair
+  - cell
+  - plus
+  - up-arrow
+  - sb_up_arrow
+  - sb_down_arrow
+  - sb_left_arrow
+  - sb_right_arrow
+  - wait
+  - watch
+  - progress
+  - v_double_arrow
+  - size_ver
+  - ns-resize
+  - h_double_arrow
+  - size_hor
+  - ew-resize
+  - size_bdiag
+  - size_fdiag
+  - nesw-resize
+  - nwse-resize
+  - ne-resize
+  - nw-resize
+  - se-resize
+  - sw-resize
+  - n-resize
+  - s-resize
+  - e-resize
+  - w-resize
+  - help
+  - question_arrow
+  - whats_this
+  - context-menu
+  - dnd-copy
+  - copy
+  - dnd-move
+  - dnd-link
+  - alias
+  - dnd-none
+  - no-drop
+  - not-allowed
+  - forbidden
+  - zoom-in
+  - zoom-out
+  - col-resize
+  - row-resize
+  - vertical-text
