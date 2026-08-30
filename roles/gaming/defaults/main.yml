@@ -1,0 +1,7 @@
+---
+# Filenames present in both Steam's bundled steam-runtime lib dirs
+# (x86_64-linux-gnu and i386-linux-gnu) — see "Fix Steam bundled libusb"
+# tasks in tasks/main.yml.
+gaming_steam_libusb_files:
+  - libusb-1.0.so.0
+  - libusb-1.0.so.0.1.0

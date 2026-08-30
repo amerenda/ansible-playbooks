@@ -44,3 +44,78 @@
     mode: "0755"
   become: false
   tags: [gaming, steam]
+
+# Fix Steam bundled libusb — Steam's bundled steam-runtime libusb-1.0.so.0
+# is an ancient 1.0.19 build that fails to load ("Couldn't load libusb" in
+# console_log.txt), which breaks HIDAPI-based controller discovery for any
+# device needing real USB-level probing (e.g. 8BitDo Ultimate 2, vendor HID
+# usage page 0xFF7A). Symlink the bundled paths to the host's real, working
+# libusb 1.0.30 instead of removing them outright — Steam's loader expects
+# a file to exist at these exact paths and does not fall through a search
+# path if it's simply missing.
+# See: Projects/Archlinux/Plans/8bitdo-ultimate-2-controller-fix.md (Obsidian)
+- name: Check bundled Steam libusb (x86_64) current state
+  ansible.builtin.stat:
+    path: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/x86_64-linux-gnu/{{ item }}"
+  become: false
+  loop: "{{ gaming_steam_libusb_files }}"
+  register: gaming_steam_libusb64_stat
+  tags: [gaming, steam, libusb]
+
+- name: Back up original bundled Steam libusb (x86_64) before symlinking
+  ansible.builtin.copy:
+    src: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/x86_64-linux-gnu/{{ item.item }}"
+    dest: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/x86_64-linux-gnu/{{ item.item }}.orig"
+    remote_src: true
+    force: false
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  become: false
+  loop: "{{ gaming_steam_libusb64_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and not item.stat.islnk
+  tags: [gaming, steam, libusb]
+
+- name: Symlink bundled Steam libusb (x86_64) to host libusb
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/x86_64-linux-gnu/{{ item }}"
+    src: /usr/lib/libusb-1.0.so.0
+    state: link
+    force: true
+  become: false
+  loop: "{{ gaming_steam_libusb_files }}"
+  tags: [gaming, steam, libusb]
+
+- name: Check bundled Steam libusb (i386) current state
+  ansible.builtin.stat:
+    path: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/i386-linux-gnu/{{ item }}"
+  become: false
+  loop: "{{ gaming_steam_libusb_files }}"
+  register: gaming_steam_libusb32_stat
+  tags: [gaming, steam, libusb]
+
+- name: Back up original bundled Steam libusb (i386) before symlinking
+  ansible.builtin.copy:
+    src: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/i386-linux-gnu/{{ item.item }}"
+    dest: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/i386-linux-gnu/{{ item.item }}.orig"
+    remote_src: true
+    force: false
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+  become: false
+  loop: "{{ gaming_steam_libusb32_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and not item.stat.islnk
+  tags: [gaming, steam, libusb]
+
+- name: Symlink bundled Steam libusb (i386) to host libusb
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.local/share/Steam/ubuntu12_32/steam-runtime/lib/i386-linux-gnu/{{ item }}"
+    src: /usr/lib32/libusb-1.0.so.0
+    state: link
+    force: true
+  become: false
+  loop: "{{ gaming_steam_libusb_files }}"
+  tags: [gaming, steam, libusb]
