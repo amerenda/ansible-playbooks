@@ -183,10 +183,14 @@ cachyos_dotfiles_dest: "{{ cachyos_user_home }}/projects/dotfiles"
 
 cachyos_joystick_notify_src: "/home/alex/claude/projects/joystick-notify"
 
-# joystick-notify package build — cloned fresh on the target host (main
-# branch) and built with makepkg, same pattern as the sunshine AUR install.
+# joystick-notify package build — cloned fresh on the target host and built
+# with makepkg, same pattern as the sunshine AUR install. Default ref is
+# main; override with -e joystick_notify_repo_version=<branch> for a
+# feature-branch test deploy (e.g. verifying a fix before merging) without
+# needing to touch this file.
 joystick_notify_repo: "git@github.com:amerenda/joystick-notify.git"
 joystick_notify_src_dir: "{{ cachyos_user_home }}/joystick-notify-build"
+joystick_notify_repo_version: main
 
 # ── Power management (KDE / powerdevil) ────────────────────────────────────────
 

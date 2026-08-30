@@ -2,18 +2,19 @@
 # Role: joystick-notify
 # Controller-driven couch mode automation for KDE Plasma.
 # Installed as a real package (packaging/PKGBUILD, makepkg -si) built from a
-# fresh clone of the joystick-notify repo's main branch on the target host —
+# fresh clone of the joystick-notify repo (ref: joystick_notify_repo_version,
+# default main — see group_vars/cachyos_workstations.yml) on the target host —
 # same pattern the sunshine role uses for its AUR install. Ships exactly two
 # systemd user units: joystick-notify.service (daemon) and
 # joystick-notify-tray.service (tray icon).
 
 # ── Source ───────────────────────────────────────────────────────────────────
 
-- name: Clone/update joystick-notify source (main)
+- name: Clone/update joystick-notify source ({{ joystick_notify_repo_version }})
   ansible.builtin.git:
     repo: "{{ joystick_notify_repo }}"
     dest: "{{ joystick_notify_src_dir }}"
-    version: main
+    version: "{{ joystick_notify_repo_version }}"
     force: false
   become: false
   tags: [joystick-notify, build]
