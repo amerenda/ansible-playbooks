@@ -78,7 +78,12 @@
   ansible.builtin.systemd:
     name: joystick-notify.service
     enabled: true
-    state: "{{ 'restarted' if jn_stale_units_removed.changed else 'started' }}"
+    # A plain package upgrade (jn_makepkg_result.changed) must restart the
+    # service too, not just the one-time stale-unit-override cleanup --
+    # otherwise `state: started` on an already-running unit is a no-op and
+    # a rebuilt package with real code changes silently never takes effect
+    # despite the playbook reporting a successful upgrade.
+    state: "{{ 'restarted' if (jn_stale_units_removed.changed or jn_makepkg_result.changed) else 'started' }}"
     scope: user
   become: false
   environment:
@@ -90,7 +95,7 @@
   ansible.builtin.systemd:
     name: joystick-notify-tray.service
     enabled: true
-    state: "{{ 'restarted' if jn_stale_units_removed.changed else 'started' }}"
+    state: "{{ 'restarted' if (jn_stale_units_removed.changed or jn_makepkg_result.changed) else 'started' }}"
     scope: user
   become: false
   environment:
