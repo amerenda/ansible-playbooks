@@ -1,0 +1,145 @@
+---
+# Role: mouse-hide
+#
+# KDE's own "hide cursor after inactivity" is idle-timer based, so ANY input
+# event -- including whatever couch mode's controller ends up generating --
+# makes the real cursor reappear. Fighting that timer is unreliable and out
+# of scope (not investigated here, by design -- see the plan). Instead this
+# installs a fully transparent Xcursor theme ("invisible") and switches to
+# it: with no visible pixels in the theme at all, it doesn't matter what
+# wakes the cursor, there is nothing to show.
+#
+# This role only builds the theme and can apply it on request via
+# mouse_hide_theme (default: invisible). It does NOT hook into
+# joystick-notify's couch/desk transitions -- that daemon is not touched by
+# this role at all, deliberately, so running this play never risks
+# restarting joystick-notify.service, Sunshine, or interrupting a live CEC/
+# Steam Big Picture session. Wiring this into automatic couch/desk
+# switching is a separate joystick-notify code change (actions/cursor.py),
+# deployed on its own schedule.
+#
+# To restore the normal cursor: re-run with -e mouse_hide_theme=breeze_cursors
+
+- name: Install xcursorgen (builds the Xcursor binary from PNG)
+  ansible.builtin.pacman:
+    name: xorg-xcursorgen
+    state: present
+  tags: [mouse-hide]
+
+- name: Ensure invisible cursor theme directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /usr/share/icons/invisible
+    - /usr/share/icons/invisible/cursors
+  tags: [mouse-hide]
+
+- name: Install invisible theme metadata
+  ansible.builtin.copy:
+    content: |
+      [Icon Theme]
+      Name=invisible
+      Comment=Fully transparent cursor -- couch mode mouse hiding
+      Inherits=core
+    dest: /usr/share/icons/invisible/index.theme
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [mouse-hide]
+
+- name: Stage the 1x1 transparent source PNG
+  ansible.builtin.copy:
+    content: "{{ mouse_hide_transparent_png_b64 | b64decode }}"
+    dest: /usr/share/icons/invisible/transparent.png
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [mouse-hide]
+
+- name: Stage xcursorgen config
+  ansible.builtin.copy:
+    content: |
+      1 0 0 transparent.png
+    dest: /usr/share/icons/invisible/invisible.in
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [mouse-hide]
+
+- name: Compile the invisible cursor (idempotent -- only runs if missing)
+  ansible.builtin.command:
+    cmd: xcursorgen invisible.in cursors/invisible_cursor
+    chdir: /usr/share/icons/invisible
+    creates: /usr/share/icons/invisible/cursors/invisible_cursor
+  tags: [mouse-hide]
+
+- name: Symlink every standard cursor name to the invisible cursor
+  ansible.builtin.file:
+    src: invisible_cursor
+    dest: "/usr/share/icons/invisible/cursors/{{ item }}"
+    state: link
+    force: true
+  loop: "{{ mouse_hide_cursor_names }}"
+  tags: [mouse-hide]
+
+# kapplymousetheme refuses to run at all under Wayland (it hard-checks
+# KWindowSystem::isPlatformX11() and exits immediately) -- this session is
+# KWin/Wayland, so apply the same three effects by hand: kcminputrc governs
+# KWin's own compositor-drawn cursor (what Steam/Big Picture and everything
+# else actually shows, since KWin draws server-side for clients that don't
+# set a custom cursor), a DBus reconfigure makes it live without needing to
+# log out, and ~/.icons/default covers any GTK/SDL app that resolves the
+# cursor theme via the classic Xcursor "default" convention instead of
+# reading kcminputrc directly.
+
+- name: Set cursor theme in kcminputrc
+  community.general.ini_file:
+    path: "{{ cachyos_user_home }}/.config/kcminputrc"
+    section: Mouse
+    option: cursorTheme
+    value: "{{ mouse_hide_theme | default('invisible') }}"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Ensure ~/.icons/default exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.icons/default"
+    state: directory
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0755"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Point ~/.icons/default at the cursor theme (GTK/SDL/generic Xcursor apps)
+  ansible.builtin.copy:
+    content: |
+      [Icon Theme]
+      Inherits={{ mouse_hide_theme | default('invisible') }}
+    dest: "{{ cachyos_user_home }}/.icons/default/index.theme"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0644"
+  become: true
+  become_user: "{{ cachyos_user }}"
+  tags: [mouse-hide]
+
+- name: Tell KWin to reconfigure (applies the cursor theme live, no logout)
+  ansible.builtin.command:
+    cmd: qdbus6 org.kde.KWin /KWin reconfigure
+  become: true
+  become_user: "{{ cachyos_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  changed_when: false
+  tags: [mouse-hide]

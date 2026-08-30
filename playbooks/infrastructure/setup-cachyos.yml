@@ -16,8 +16,8 @@
 #
 # Tags (run subsections independently):
 #   common, kde, amd-gpu, gaming, docker, desktop-apps,
-#   ssh-keys, dotfiles, hardware-tweaks, power-profiles, moondeck, sunshine,
-#   joystick-notify, k3s-agent, komodo, restic
+#   ssh-keys, dotfiles, hardware-tweaks, mouse-hide, power-profiles, moondeck,
+#   sunshine, joystick-notify, k3s-agent, komodo, restic
 #
 # Hard constraints:
 #   - /mnt/storage is never touched
@@ -114,6 +114,24 @@
   roles:
     - role: ../../roles/hardware-tweaks
       tags: [hardware-tweaks]
+
+# ── Play 5a: Mouse hiding (invisible cursor theme for couch mode) ─────────────
+# Deliberately independent of joystick-notify -- installs/updates the
+# "invisible" cursor theme and applies it, but never touches
+# joystick-notify/Sunshine/MoonDeckBuddy services, so this play is safe to
+# run on its own (--tags mouse-hide) without risking a live couch-mode/CEC/
+# Steam session.
+
+- name: CachyOS — mouse hiding (invisible cursor theme)
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/mouse-hide
+      tags: [mouse-hide]
 
 # ── Play 5b: Power profiles (idle → power-saver, active → performance) ────────
 
