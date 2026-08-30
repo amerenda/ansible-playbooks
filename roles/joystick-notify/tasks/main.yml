@@ -20,16 +20,29 @@
 
 # ── Build + install (makepkg -si) ───────────────────────────────────────────
 
+# pkgver/pkgrel are static (0.1.0-1, not derived from git -- see PKGBUILD)
+# and this dir keeps whatever .pkg.tar.zst makepkg last produced. Found
+# live 2026-08-30: `-si --needed` silently no-opped a real deploy --
+# makepkg saw the existing build artifact and skipped rebuilding, then
+# pacman's --needed saw the same installed version and skipped
+# reinstalling, so a git pull of new commits (PR #26) built cleanly on
+# the surface but never actually reached the running package at all.
+# `-f` forces a rebuild regardless of an existing artifact; dropping
+# --needed makes pacman -U install the freshly-built package regardless
+# of whether its version string happens to match what's already
+# installed. Correct for this PKGBUILD's own stated purpose ("the
+# day-to-day install/test loop during this rewrite") -- every run of
+# this tag is supposed to mean "deploy whatever main currently is."
 - name: Build and install joystick-notify package
   ansible.builtin.shell: |
     set -euo pipefail
-    makepkg -si --noconfirm --needed
+    makepkg -sfi --noconfirm
   args:
     chdir: "{{ joystick_notify_src_dir }}/packaging"
     executable: /bin/bash
   become: false
   register: jn_makepkg_result
-  changed_when: "'-U ' in jn_makepkg_result.stdout or 'installing joystick-notify' in jn_makepkg_result.stdout or 'upgrading joystick-notify' in jn_makepkg_result.stdout"
+  changed_when: "'-U ' in jn_makepkg_result.stdout or 'installing joystick-notify' in jn_makepkg_result.stdout or 'upgrading joystick-notify' in jn_makepkg_result.stdout or 'reinstalling' in jn_makepkg_result.stdout"
   tags: [joystick-notify, build]
 
 # ── Systemd user units (shipped by the package at /usr/lib/systemd/user/) ──
