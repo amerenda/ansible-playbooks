@@ -29,9 +29,18 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="3109", MODE="0660
 # -------------------------------------------------------------------
 KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="310b", MODE="0660", TAG+="uaccess"
 
-# Bind the XInput vendor interface to the kernel `xpad` driver so the device shows up
-# as a proper game controller (instead of only keyboard/mouse HID).
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", ATTR{idProduct}=="310b", RUN+="/sbin/modprobe xpad", RUN+="/bin/sh -c 'echo 2dc8 310b > /sys/bus/usb/drivers/xpad/new_id'"
+# NOTE: a previous version of this file force-bound the kernel `xpad` (XInput)
+# driver here via modprobe + `new_id`. Removed 2026-08-30: confirmed via
+# `dmesg -T` that it failed on every single connect
+# (`xpad_try_sending_next_out_packet - usb_submit_urb failed with result -2`),
+# it only ever applied to X-input mode (the controller is run in D-input here
+# -- required for Steam-side button remapping, X-input is not usable for
+# that), and 8BitDo's own Steam compatibility page states the Ultimate 2
+# gets native Steam Input support directly over hidraw with no third-party
+# driver needed. The hidraw `uaccess` grants above are what Steam/SDL HIDAPI
+# actually needs -- see
+# Projects/Archlinux/Plans/8bitdo-ultimate-2-controller-fix.md (Obsidian)
+# for the full diagnosis.
 
 # Some firmwares enumerate briefly as "Ultimate 2" before switching to 310b.
 KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="6013", MODE="0660", TAG+="uaccess"
