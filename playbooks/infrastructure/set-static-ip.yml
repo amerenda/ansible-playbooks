@@ -1,0 +1,137 @@
+---
+# Pins a host's current DHCP-leased IP as static. Auto-detects the network
+# stack (dhcpcd / netplan / NetworkManager) the same way setup-rpi.yml does,
+# but uses the host's actual default interface instead of assuming eth0 —
+# needed for laptops, which are commonly on Wi-Fi.
+#
+# Run with: ansible-playbook -i inventory/inventory.ini \
+#   playbooks/infrastructure/set-static-ip.yml --limit <host>
+
+- name: Pin current DHCP address as static
+  hosts: laptop
+  become: true
+  gather_facts: true
+
+  vars:
+    static_gateway: "10.100.20.1"
+    static_dns:
+      - "1.1.1.1"
+      - "8.8.8.8"
+
+  tasks:
+    - name: Check if dhcpcd service exists
+      stat:
+        path: /lib/systemd/system/dhcpcd.service
+      register: dhcpcd_service_file
+      tags: [network, static-ip]
+
+    - name: Check if netplan directory exists
+      stat:
+        path: /etc/netplan
+      register: netplan_dir
+      tags: [network, static-ip]
+
+    - name: Check if NetworkManager is running
+      systemd:
+        name: NetworkManager
+      register: networkmanager_status
+      failed_when: false
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (dhcpcd)
+      blockinfile:
+        path: /etc/dhcpcd.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - Static IP Configuration"
+        block: |
+          # Static IP Configuration
+          interface {{ ansible_default_ipv4.interface }}
+          static ip_address={{ ansible_default_ipv4.address }}/24
+          static routers={{ static_gateway }}
+          static domain_name_servers={{ static_dns | join(' ') }}
+        backup: yes
+      when: dhcpcd_service_file.stat.exists
+      tags: [network, static-ip]
+
+    - name: Create netplan directory
+      file:
+        path: /etc/netplan
+        state: directory
+        mode: '0755'
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (netplan)
+      copy:
+        dest: /etc/netplan/99-static.yaml
+        content: |
+          network:
+            version: 2
+            ethernets:
+              {{ ansible_default_ipv4.interface }}:
+                dhcp4: false
+                addresses:
+                  - {{ ansible_default_ipv4.address }}/24
+                routes:
+                  - to: default
+                    via: {{ static_gateway }}
+                nameservers:
+                  addresses:
+                    {% for dns in static_dns %}
+                    - {{ dns }}
+                    {% endfor %}
+        mode: '0644'
+        backup: yes
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Restart networking service (dhcpcd)
+      systemd:
+        name: dhcpcd
+        state: restarted
+      when: dhcpcd_service_file.stat.exists
+      tags: [network, static-ip]
+
+    - name: Apply netplan configuration
+      command: netplan apply
+      when: netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    # Modify the connection profile that is actually active on the default
+    # interface (looked up by name, not guessed) rather than creating a new
+    # profile — important on laptops, where the active profile is named
+    # after the Wi-Fi SSID, not the interface. Creating a mismatched profile
+    # would leave the real connection on DHCP.
+    - name: Get active NetworkManager connections
+      command: nmcli -t -f NAME,DEVICE connection show --active
+      register: nm_active_connections
+      changed_when: false
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Identify the active connection profile on the default interface
+      set_fact:
+        nm_conn_name: "{{ (nm_active_connections.stdout_lines | select('search', ':' + ansible_default_ipv4.interface + '$') | list | first).split(':')[0] }}"
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Configure static IP and DNS (NetworkManager)
+      command: >
+        nmcli connection modify "{{ nm_conn_name }}"
+        ipv4.addresses {{ ansible_default_ipv4.address }}/24
+        ipv4.gateway {{ static_gateway }}
+        ipv4.dns "{{ static_dns | join(' ') }}"
+        ipv4.method manual
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Bring the connection back up with the new static config
+      command: nmcli connection up "{{ nm_conn_name }}"
+      when: networkmanager_status.status.ActiveState == "active" and not netplan_dir.stat.exists
+      tags: [network, static-ip]
+
+    - name: Verify network connectivity
+      wait_for:
+        host: 8.8.8.8
+        port: 53
+        timeout: 10
+      tags: [network, static-ip]
