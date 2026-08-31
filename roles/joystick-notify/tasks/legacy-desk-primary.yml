@@ -1,0 +1,118 @@
+---
+# Legacy pre-v2-rewrite "force desk monitor primary" subsystem.
+#
+# These 5 files (config-env.sh, force-desk-primary.sh,
+# force-desk-primary-greeter.sh, and the two systemd units) predate the v2
+# python rewrite and were never carried into it — they were previously
+# installed by hand / by an older, since-removed ansible task (main.yml
+# commit 8a83b9e, since superseded by the git-clone+makepkg install above)
+# and had drifted completely untracked since. They are still live and doing
+# real work: forcing the desk monitor primary and disabling the couch TV
+# output whenever KDE returns to the login greeter (both at boot and any
+# time plasmalogin restarts), so the TV doesn't stay stuck extended at the
+# login screen.
+#
+# Bringing them under this role closes that drift gap and carries the
+# 2026-08-31 fix: force-desk-primary-greeter.sh never checked couch mode
+# before disabling the couch output, and even where the check existed
+# (force-desk-primary.sh), it read a v1 lock file
+# (/tmp/joystick-notify/locks/owner.lock) the v2 daemon never writes to —
+# so it always evaluated false. A spurious plasmalogin restart mid-session
+# (the documented CachyOS "double login" bug) refired the greeter unit
+# while the desk user was actively in couch mode gaming, and it disabled
+# the TV output outright with no CEC involved at all. Both scripts now
+# share a fixed is_couch_mode() in config-env.sh that reads the real v2
+# state from health.json instead.
+
+- name: Ensure /usr/local/lib/joystick-notify exists
+  ansible.builtin.file:
+    path: /usr/local/lib/joystick-notify
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Deploy legacy config-env.sh (shared is_couch_mode source of truth)
+  ansible.builtin.copy:
+    src: legacy-desk-primary/config-env.sh
+    dest: /usr/local/lib/joystick-notify/config-env.sh
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Deploy force-desk-primary.sh (user-session desk-primary enforcement)
+  ansible.builtin.copy:
+    src: legacy-desk-primary/force-desk-primary.sh
+    dest: /usr/local/bin/force-desk-primary.sh
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Deploy force-desk-primary-greeter.sh (pre-login desk-primary enforcement)
+  ansible.builtin.copy:
+    src: legacy-desk-primary/force-desk-primary-greeter.sh
+    dest: /usr/local/bin/force-desk-primary-greeter.sh
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Ensure user systemd unit directory exists
+  ansible.builtin.file:
+    path: "{{ cachyos_user_home }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+  become: false
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Deploy force-desk-primary.service (systemd --user unit)
+  ansible.builtin.copy:
+    src: legacy-desk-primary/force-desk-primary.service
+    dest: "{{ cachyos_user_home }}/.config/systemd/user/force-desk-primary.service"
+    mode: "0644"
+  become: false
+  register: jn_legacy_user_unit
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Deploy plasmalogin-desk-primary.service (system unit, runs pre-login)
+  ansible.builtin.copy:
+    src: legacy-desk-primary/plasmalogin-desk-primary.service
+    dest: /etc/systemd/system/plasmalogin-desk-primary.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: jn_legacy_system_unit
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Reload user systemd daemon (legacy desk-primary unit)
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ cachyos_user_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ cachyos_user_uid }}/bus"
+  when: jn_legacy_user_unit.changed
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Reload system systemd daemon (plasmalogin-desk-primary unit)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: jn_legacy_system_unit.changed
+  tags: [joystick-notify, legacy-desk-primary]
+
+- name: Enable plasmalogin-desk-primary.service
+  ansible.builtin.systemd:
+    name: plasmalogin-desk-primary.service
+    enabled: true
+  become: true
+  tags: [joystick-notify, legacy-desk-primary]
