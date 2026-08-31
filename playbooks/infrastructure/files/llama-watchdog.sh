@@ -1,16 +1,22 @@
 #!/bin/bash
-# llama-watchdog — VRAM guardian + stall detector for murderbot
+# llama-watchdog — stall detector for murderbot
 #
-# Restarts the llama-server Docker container if:
-#   1. Free VRAM drops below VRAM_MIN_MIB (protects Jellyfin NVENC transcoding)
-#   2. A slot has been occupied with no new tokens for STALL_TIMEOUT_S
-#      (catches the PR #22907 cascade and other hung-inference states)
+# Restarts the llama-server Docker container if a slot has been occupied
+# with no new tokens for STALL_TIMEOUT_S (catches the PR #22907 cascade
+# and other hung-inference states).
+#
+# VRAM-threshold restarts were removed 2026-08-31: that check existed to
+# protect Jellyfin NVENC transcoding headroom, but Jellyfin no longer uses
+# this GPU for transcoding, and the check was incompatible with the
+# qwen36 profile's 98,304-context footprint (~421 MiB free once loaded,
+# under the old 800 MiB threshold), which put llama-server in a permanent
+# crash-restart loop.
 #
 # Runs as a systemd service. See llama-watchdog.service.
-# Install via: ~/claude/manual_runs/install-llama-watchdog.sh
+# Deployed via ansible-playbooks/playbooks/infrastructure/setup-debian-komodo.yml
+# (tags: debian-komodo, debian-llama-watchdog).
 
 CONTAINER=llama-server
-VRAM_MIN_MIB=800          # Restart if free VRAM drops below this
 STALL_TIMEOUT_S=300       # Restart if no new tokens for 5 min while slot busy
 CHECK_INTERVAL_S=30       # Poll interval
 COOLDOWN_S=180            # Minimum seconds between restarts
@@ -46,20 +52,12 @@ restart_container() {
     return 0
 }
 
-log "starting (container=$CONTAINER, vram_min=${VRAM_MIN_MIB}MiB, stall=${STALL_TIMEOUT_S}s)"
+log "starting (container=$CONTAINER, stall=${STALL_TIMEOUT_S}s)"
 
 while true; do
     sleep "$CHECK_INTERVAL_S"
 
-    # ── 1. VRAM protection ───────────────────────────────────────────────────
-    free_mib=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null \
-               | head -1 | tr -d ' ')
-    if [[ "$free_mib" =~ ^[0-9]+$ && "$free_mib" -lt "$VRAM_MIN_MIB" ]]; then
-        restart_container "VRAM critically low: ${free_mib} MiB free (min: ${VRAM_MIN_MIB} MiB)"
-        continue
-    fi
-
-    # ── 2. Stall detection ───────────────────────────────────────────────────
+    # ── Stall detection ──────────────────────────────────────────────────────
     requests=$(get_metric "llamacpp:requests_processing")
     tokens=$(get_metric "llamacpp:tokens_predicted_total")
     now=$(date +%s)
