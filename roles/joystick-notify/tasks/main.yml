@@ -225,3 +225,10 @@
   become: true
   when: jn_cec0_configure_override.changed
   tags: [joystick-notify, cec]
+
+# ── Legacy pre-v2 desk-primary-enforcement subsystem ─────────────────────────
+# See tasks/legacy-desk-primary.yml for the full history/rationale.
+
+- name: Manage legacy desk-primary-enforcement subsystem
+  ansible.builtin.include_tasks: legacy-desk-primary.yml
+  tags: [joystick-notify, legacy-desk-primary]
