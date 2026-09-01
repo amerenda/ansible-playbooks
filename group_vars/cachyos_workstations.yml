@@ -88,6 +88,10 @@ cachyos_pacman_packages:
   - lib32-mangohud
   - gamemode
   - lib32-gamemode
+  # lib32-libusb: host has no 32-bit libusb by default, but Steam's own
+  # launcher process is 32-bit (i386) and needs one to symlink against —
+  # see roles/gaming/tasks/main.yml "Fix Steam bundled libusb" tasks.
+  - lib32-libusb
   - gamescope
   # Kernel headers + DKMS modules
   - linux-headers
