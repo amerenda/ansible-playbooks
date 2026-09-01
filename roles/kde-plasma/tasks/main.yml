@@ -57,6 +57,27 @@
     mode: "0644"
   tags: [kde, sddm, wayland]
 
+# Autologin is paired with kscreenlockerrc LockOnStart below: skipping the
+# login screen but re-locking immediately as the real security boundary.
+# Superseded design note: an earlier attempt (PR #65) paired this with a
+# hand-rolled lock-on-login.sh autostart hack instead of native LockOnStart;
+# that script was deployed directly to archlinux outside ansible and removed
+# by hand during the 2026-08-28 incident bisection. Native LockOnStart (PR
+# #73) replaces it — no shell script, no autostart .desktop entry needed.
+- name: Configure plasmalogin autologin (graphical-session.target — and therefore
+    Sunshine/MoonDeckBuddy/joystick-notify — comes up without a physical login)
+  ansible.builtin.copy:
+    content: |
+      [Autologin]
+      User={{ cachyos_user }}
+      Session=plasma
+      Relogin=true
+    dest: /etc/plasmalogin.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kde, plasmalogin, autologin]
+
 - name: Ensure plasmalogin .config directory exists
   ansible.builtin.file:
     path: /var/lib/plasmalogin/.config
@@ -85,6 +106,18 @@
     executable: /bin/bash
   changed_when: false
   tags: [kde, theme]
+
+# LockOnStart is KDE's native mechanism for "lock immediately on session start"
+# (https://wiki.archlinux.org/title/KDE#Lock_screen) — only useful paired with
+# autologin (skip the login screen, but re-lock immediately as the real
+# security boundary). Autologin is enabled above, so this must be true — flip
+# both together, never one without the other (leaving autologin on with this
+# false would hand out an already-open desktop to physical access).
+- name: Lock session immediately on start (kscreenlockerrc LockOnStart), paired with autologin
+  ansible.builtin.shell: kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnStart true
+  become: false
+  changed_when: false
+  tags: [kde, plasmalogin, autologin]
 
 # ── DPMS sleep fix ─────────────────────────────────────────────────────────
 #
