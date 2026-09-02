@@ -1,0 +1,9 @@
+[Login]
+# joystick-notify's shutdown_watcher.py holds a shutdown inhibitor lock
+# (mode=delay) so it can tear a live couch session down to desk before
+# the system actually powers off -- see the daemon's ShutdownConfig for
+# the full reasoning. Default logind.conf's InhibitDelayMaxSec (5s) is
+# not enough for that teardown to reliably finish; this bumps it to
+# match the daemon's own config.shutdown.teardown_timeout_s (13s) plus a
+# couple seconds of margin for the D-Bus round trip.
+InhibitDelayMaxSec={{ joystick_notify_shutdown_inhibit_delay_max_s }}

@@ -256,6 +256,35 @@
   when: jn_cec0_configure_override.changed
   tags: [joystick-notify, cec]
 
+# ── logind shutdown-inhibitor delay (for shutdown_watcher.py) ──────────────
+# Deploy-only, deliberately no live `systemctl restart systemd-logind`
+# here -- a config-file change alone is picked up by the next real
+# logind start (i.e. the next reboot), which this feature needs a reboot
+# to verify anyway. Restarting logind live is safe in practice (it
+# doesn't drop active sessions), but there's no reason to take even a
+# low-risk live action on a system service when the verification step
+# already requires a reboot.
+
+- name: Ensure /etc/systemd/logind.conf.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/logind.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [joystick-notify, shutdown]
+
+- name: Deploy logind shutdown-inhibitor delay drop-in
+  ansible.builtin.template:
+    src: logind-shutdown-inhibit.conf.j2
+    dest: /etc/systemd/logind.conf.d/joystick-notify-shutdown-inhibit.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  tags: [joystick-notify, shutdown]
+
 # ── Legacy pre-v2 desk-primary-enforcement subsystem ─────────────────────────
 # See tasks/legacy-desk-primary.yml for the full history/rationale.
 
