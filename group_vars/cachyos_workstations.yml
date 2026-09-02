@@ -196,6 +196,10 @@ joystick_notify_repo: "git@github.com:amerenda/joystick-notify.git"
 joystick_notify_src_dir: "{{ cachyos_user_home }}/joystick-notify-build"
 joystick_notify_repo_version: main
 
+# Matches config.shutdown.teardown_timeout_s (default 13s) plus a couple
+# seconds of margin for the D-Bus round trip -- see shutdown_watcher.py.
+joystick_notify_shutdown_inhibit_delay_max_s: 15
+
 # ── Power management (KDE / powerdevil) ────────────────────────────────────────
 
 kde_display_off_idle_timeout_sec: 600
