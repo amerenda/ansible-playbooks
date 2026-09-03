@@ -55,8 +55,10 @@ min_log_level = 3
 
 # ── Stream lifecycle hooks ────────────────────────────────
 # On stream start: create+enable the virtual display at the client's requested
-#   resolution and disable physical outputs, THEN switch to Couch virtual
-#   desktop, dismiss the KDE lock screen, disable idle autolock.
-# On stream end: reverse order — restore desktop/autolock, then restore
-#   physical outputs and destroy the virtual display.
-global_prep_cmd=[{"do":"/usr/local/bin/sunshine-vdisplay-connect.sh","undo":"/usr/local/bin/sunshine-vdisplay-disconnect.sh","elevated":false},{"do":"/usr/local/bin/sunshine-couch-prep.sh","undo":"/usr/local/bin/sunshine-couch-undo.sh","elevated":false}]
+#   resolution and disable physical outputs, THEN dismiss the KDE lock screen
+#   and disable idle autolock (screen unlock only — NOT the full couch-mode
+#   transition; no CEC TV/receiver wake, no physical display/audio switch —
+#   see joystick-notify's sunshine-unlock-prep.sh for why).
+# On stream end: reverse order — restore autolock, then restore physical
+#   outputs and destroy the virtual display.
+global_prep_cmd=[{"do":"/usr/local/bin/sunshine-vdisplay-connect.sh","undo":"/usr/local/bin/sunshine-vdisplay-disconnect.sh","elevated":false},{"do":"/usr/local/bin/sunshine-unlock-prep.sh","undo":"/usr/local/bin/sunshine-unlock-undo.sh","elevated":false}]
