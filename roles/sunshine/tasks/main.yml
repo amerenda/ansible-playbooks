@@ -38,6 +38,27 @@
   tags: [sunshine, aur]
 
 # ── Scripts ────────────────────────────────────────────────────────────────────
+# v1's standalone unlock scripts (couch-mode-screen-unlock.sh,
+# screen-lock-inhibit-daemon.sh, launch-bigpicture.sh, etc.) were removed
+# wholesale in the joystick-notify v2 rewrite. sunshine-unlock-prep.sh/
+# -undo.sh are now thin wrappers around the v2 daemon's own wizard API
+# (POST /api/screen/unlock|/lock) -- screen unlock/inhibit ONLY, the same
+# screen_lock.py mechanism a controller connect uses, deliberately NOT
+# the full couch-mode transition (no CEC TV/receiver wake, no physical
+# display/audio switch) -- a Sunshine stream is often remote (Steam Deck,
+# not the couch), so it has no business waking hardware nobody's in
+# front of. Steam Big Picture still launches via the daemon's own
+# config.on_connect (already set to "steam-bigpicture" on this host,
+# fires on any couch-mode entry) -- see joystick-notify PR #33.
+
+- name: Remove stale pre-rename script leftovers (sunshine-couch-*.sh)
+  ansible.builtin.file:
+    path: "/usr/local/bin/{{ item }}"
+    state: absent
+  loop:
+    - sunshine-couch-prep.sh
+    - sunshine-couch-undo.sh
+  tags: [sunshine, scripts]
 
 - name: Install sunshine prep/undo scripts from joystick-notify repo
   ansible.builtin.copy:
@@ -47,26 +68,49 @@
     group: root
     mode: "0755"
   loop:
-    - sunshine-couch-prep.sh
-    - sunshine-couch-undo.sh
-    # Shared with joystick-notify's local couch-mode activate/teardown (lib/status-notify.sh
-    # set_screen_lock) — prevents the screen locking mid-session, on either trigger path.
-    - couch-mode-screen-unlock.sh
-    # Holds ScreenSaver.Inhibit() cookie for the session lifetime; started by
-    # sunshine-couch-prep.sh and killed by sunshine-couch-undo.sh.
-    - screen-lock-inhibit-daemon.sh
-    # Integration test — run manually to verify the unlock script works end-to-end.
-    - test-screen-unlock.sh
+    - sunshine-unlock-prep.sh
+    - sunshine-unlock-undo.sh
+    # Per-app prep-cmd for the "Steam Big Picture" apps.json entry only
+    # (not the global hook above) -- see joystick-notify PR #33.
+    - sunshine-launch-steam-bigpicture.sh
   tags: [sunshine, scripts]
 
-- name: Install launch-bigpicture script (used by sunshine apps.json)
+# ── API token (Sunshine -> joystick-notify wizard auth) ────────────────────────
+# sunshine_api_token is passed as an extra-var (-e), sourced from BWS
+# secret joystick-notify-dean-sunshine-api-token -- deliberately NOT
+# fetched via fetch-secrets.yml/bws_secrets (that play only targets
+# localhost and needs bws_access_token; this role is routinely run
+# --limit archlinux alone). Idempotent: installing the same token twice
+# produces the same working state each time.
+
+- name: Require sunshine_api_token
+  ansible.builtin.assert:
+    that:
+      - sunshine_api_token is defined
+      - sunshine_api_token | length > 0
+    fail_msg: >-
+      sunshine_api_token is required (BWS secret
+      joystick-notify-dean-sunshine-api-token) -- pass with
+      -e sunshine_api_token=<value>
+  tags: [sunshine, api-token]
+
+- name: Write the API token where sunshine-couch-prep.sh/-undo.sh read it
   ansible.builtin.copy:
-    src: "{{ cachyos_joystick_notify_src }}/scripts/launch-bigpicture.sh"
-    dest: /usr/local/bin/launch-bigpicture.sh
-    owner: root
-    group: root
-    mode: "0755"
-  tags: [sunshine, scripts]
+    content: "{{ sunshine_api_token }}"
+    dest: "{{ cachyos_user_home }}/.config/joystick-notify/sunshine-api-token"
+    owner: "{{ cachyos_user }}"
+    group: "{{ cachyos_user }}"
+    mode: "0600"
+  become: false
+  no_log: true
+  tags: [sunshine, api-token]
+
+- name: Install the token's hash into the joystick-notify daemon
+  ansible.builtin.command: jn-daemon --install-api-token {{ sunshine_api_token }}
+  become: false
+  changed_when: false
+  no_log: true
+  tags: [sunshine, api-token]
 
 # Virtual-display scripts — see roles/sunshine/files/sunshine-display-backend.sh
 # for why: Sunshine's dd_resolution_option automatic resolution switching does

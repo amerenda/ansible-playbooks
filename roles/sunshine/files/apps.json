@@ -2,25 +2,15 @@
     "apps": [
         {
             "image-path": "desktop.png",
-            "name": "Desktop",
-            "prep-cmd": [
-                {
-                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
-                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
-                    "elevated": false
-                }
-            ]
+            "name": "Desktop"
         },
         {
-            "detached": [
-                "/usr/local/bin/launch-bigpicture.sh"
-            ],
             "image-path": "steam.png",
             "name": "Steam Big Picture",
             "prep-cmd": [
                 {
-                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
-                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
+                    "do": "/usr/local/bin/sunshine-launch-steam-bigpicture.sh",
+                    "undo": "/bin/true",
                     "elevated": false
                 }
             ]
@@ -28,14 +18,7 @@
         {
             "cmd": "/usr/bin/MoonDeckStream",
             "image-path": "steam.png",
-            "name": "MoonDeckStream",
-            "prep-cmd": [
-                {
-                    "do": "/usr/local/bin/sunshine-couch-prep.sh",
-                    "undo": "/usr/local/bin/sunshine-couch-undo.sh",
-                    "elevated": false
-                }
-            ]
+            "name": "MoonDeckStream"
         }
     ],
     "env": {
