@@ -1,0 +1,91 @@
+---
+# TCP Port Exhaustion Mitigation for mac-mini-m4
+#
+# Stopgap for INC-2026-09-07: a connection-flood (mostly loopback/self
+# traffic, cause not yet identified — see the Obsidian incident note and
+# Areas/Mac Mini/Plans/tcp-port-exhaustion-mitigation.md Phase 3) drove
+# mac-mini-m4's entire ephemeral port range (49152-65535, 16383 ports) into
+# TIME_WAIT, blocking every new outbound TCP connection host-wide,
+# including Komodo's git fetch of komodo-dean-gitops.
+#
+# This does NOT fix the flood's source — it only buys headroom (~4x more
+# ephemeral ports, 3x faster TIME_WAIT drain) so a repeat of the same flood
+# rate takes longer to exhaust the range, and so the range recovers faster
+# once the flood stops. Root-causing the actual offending process is a
+# separate, still-open follow-up.
+#
+# Applies at runtime via `sysctl -w` (effective immediately, no reboot) and
+# persists across reboots via /etc/sysctl.conf, matching the existing
+# net.inet.ip.forwarding pattern for this host in setup-macmini.yml.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
+#
+# Idempotency check (run twice, second run should report changed=0 for the
+# persistent-config task and unchanged sysctl values on verify):
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
+
+- name: Mitigate TCP port exhaustion on mac-mini-m4
+  hosts: macmini_hosts
+  become: yes
+  gather_facts: yes
+  tags: [macmini, tcp-tuning]
+
+  vars:
+    macmini_tcp_tuning_params:
+      # Default 49152 (IANA dynamic/private floor) leaves only 16383
+      # ephemeral ports. 32768 is the common BSD/Linux ephemeral floor and
+      # roughly doubles the range to 32767 ports.
+      net.inet.ip.portrange.first: 32768
+      # Default 15000ms -> 30s TIME_WAIT (2*MSL). 5000ms -> 10s TIME_WAIT,
+      # so exhausted ports free up 3x faster under sustained churn.
+      net.inet.tcp.msl: 5000
+
+  tasks:
+    - name: Fail fast if targeting a non-macOS host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'Darwin'
+        fail_msg: >-
+          macmini-tcp-tuning.yml uses BSD/Darwin-only sysctl names
+          (net.inet.*) and is only meant for macmini_hosts.
+          {{ inventory_hostname }} reports os_family={{ ansible_facts['os_family'] }}.
+
+    - name: Configure TCP tuning persistently via /etc/sysctl.conf
+      ansible.builtin.lineinfile:
+        path: /etc/sysctl.conf
+        regexp: "^{{ item.key | regex_escape }}="
+        line: "{{ item.key }}={{ item.value }}"
+        create: yes
+        owner: root
+        group: wheel
+        mode: '0644'
+      loop: "{{ macmini_tcp_tuning_params | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value }}"
+      register: macmini_tcp_tuning_config
+
+    - name: Apply TCP tuning immediately (runtime, no reboot required)
+      ansible.builtin.command:
+        cmd: "sysctl -w {{ item.key }}={{ item.value }}"
+      loop: "{{ macmini_tcp_tuning_params | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value }}"
+      changed_when: false
+
+    - name: Verify current sysctl values
+      ansible.builtin.command:
+        cmd: "sysctl {{ item.key }}"
+      loop: "{{ macmini_tcp_tuning_params | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: macmini_tcp_tuning_verify
+      changed_when: false
+
+    - name: Show current values
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ macmini_tcp_tuning_verify.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
