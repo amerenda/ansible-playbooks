@@ -35,6 +35,22 @@ adapter_name = /dev/dri/renderD128
 # since this is a single global capture target, not per-app.
 output_name = Virtual-SunshineHeadless
 
+# ── Web UI / CSRF ──────────────────────────────────────────
+# The web UI is reached from more than just localhost -- the LAN IP and the
+# Tailscale IP both present an Origin Sunshine doesn't trust by default,
+# which blocks the web UI outright with a CSRF protection error (recovered
+# from an unmerged 2026-07-20 fix, ansible-playbooks branch
+# fix/sunshine-kwin-screencast-perms, commit 7173ebc -- lost when that
+# branch never merged).
+csrf_allowed_origins = https://{{ archlinux_ip }}:47990,https://100.110.103.17:47990
+
+# Sunshine's /api/pin endpoint always reports {"status": true} regardless of
+# whether pairing actually completes (upstream bug, LizardByte/Sunshine#3944).
+# The real gate is this origin check: without "wan", PIN submissions from a
+# non-LAN origin (e.g. over Tailscale) silently fail to complete pairing
+# server-side even though the UI reports success.
+origin_web_ui_allowed = wan
+
 # ── Network / Quality ──────────────────────────────────────
 
 # 0 = no server-side cap; Moonlight clients set their own bitrate target.
