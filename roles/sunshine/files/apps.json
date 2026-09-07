@@ -10,7 +10,7 @@
             "prep-cmd": [
                 {
                     "do": "/usr/local/bin/sunshine-launch-steam-bigpicture.sh",
-                    "undo": "/bin/true",
+                    "undo": "/usr/local/bin/sunshine-exit-steam-bigpicture.sh",
                     "elevated": false
                 }
             ]

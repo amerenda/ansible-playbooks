@@ -71,8 +71,14 @@
     - sunshine-unlock-prep.sh
     - sunshine-unlock-undo.sh
     # Per-app prep-cmd for the "Steam Big Picture" apps.json entry only
-    # (not the global hook above) -- see joystick-notify PR #33.
+    # (not the global hook above) -- see joystick-notify PR #33. The
+    # undo half (sunshine-exit-steam-bigpicture.sh) is what actually
+    # closes Big Picture on stream stop -- see joystick-notify PR #36;
+    # apps.json's prior "undo": "/bin/true" left it running after
+    # disconnect since this app entry has no `cmd` for Sunshine to kill
+    # itself.
     - sunshine-launch-steam-bigpicture.sh
+    - sunshine-exit-steam-bigpicture.sh
   tags: [sunshine, scripts]
 
 # ── API token (Sunshine -> joystick-notify wizard auth) ────────────────────────
