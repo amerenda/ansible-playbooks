@@ -164,6 +164,27 @@
     - "48010"   # mic
   tags: [sunshine, ufw]
 
+# ── mDNS (Moonlight host discovery) ─────────────────────────────────────────────
+# Moonlight's "auto-discover hosts on your network" relies on mDNS: Sunshine
+# publishes _nvstream._tcp via avahi, and the Moonlight client both sends its
+# query and receives the reply over UDP 5353. ufw's default-deny INPUT policy
+# silently drops that traffic on either end -- diagnosed 2026-09-06 when
+# Moonlight on a client (lemurpro) never found this host even though avahi on
+# the Sunshine host was publishing the record correctly the whole time
+# (avahi-browse run locally on the host sees its own advertisement regardless
+# of ufw, which is what made this look like a working avahi with no obvious
+# cause -- it's specifically the *inbound* UDP 5353 packet from the other
+# host that ufw was dropping). Tagged separately (not just `sunshine`) since
+# this same rule is also applied to Moonlight-client-only hosts in this play
+# that don't get the rest of this role -- see setup-cachyos.yml's mdns tag.
+- name: Allow mDNS (avahi, UDP 5353) through UFW for Sunshine/Moonlight discovery
+  community.general.ufw:
+    rule: allow
+    port: "5353"
+    proto: udp
+    comment: "mDNS discovery (Sunshine/Moonlight)"
+  tags: [sunshine, mdns]
+
 # ── Udev / cap_sys_admin ───────────────────────────────────────────────────────
 
 - name: Add udev rule so Sunshine can access /dev/uinput without root
