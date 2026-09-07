@@ -71,8 +71,21 @@ min_log_level = 3
 
 # ── Stream lifecycle hooks ────────────────────────────────
 # On stream start: create+enable the virtual display at the client's requested
-#   resolution and disable physical outputs, THEN switch to Couch virtual
-#   desktop, dismiss the KDE lock screen, disable idle autolock.
-# On stream end: reverse order — restore desktop/autolock, then restore
-#   physical outputs and destroy the virtual display.
-global_prep_cmd=[{"do":"/usr/local/bin/sunshine-vdisplay-connect.sh","undo":"/usr/local/bin/sunshine-vdisplay-disconnect.sh","elevated":false},{"do":"/usr/local/bin/sunshine-couch-prep.sh","undo":"/usr/local/bin/sunshine-couch-undo.sh","elevated":false}]
+#   resolution and disable physical outputs, THEN dismiss the KDE lock screen
+#   and disable idle autolock (screen unlock only — NOT the full couch-mode
+#   transition; no CEC TV/receiver wake, no physical display/audio switch —
+#   see joystick-notify's sunshine-unlock-prep.sh for why. A remote/Deck
+#   stream shouldn't wake hardware nobody's in front of).
+# On stream end: reverse order — restore autolock, then restore physical
+#   outputs and destroy the virtual display.
+#
+# NOTE: this references sunshine-unlock-prep.sh/-undo.sh, which this repo's
+# own "Install sunshine prep/undo scripts" task (above) does NOT install --
+# they ship from joystick-notify PR #33 (unmerged as of 2026-09-07). Until
+# that PR merges, this line must keep matching whatever prep/undo scripts
+# are actually present on disk (`ls /usr/local/bin/sunshine-*.sh`), or a
+# config-only redeploy (e.g. --tags config) will silently point Sunshine at
+# a script that doesn't exist and every stream launch will fail with
+# "Couldn't run [...]: No such file or directory" -- this broke live
+# streaming on 2026-09-07 for exactly that reason.
+global_prep_cmd=[{"do":"/usr/local/bin/sunshine-vdisplay-connect.sh","undo":"/usr/local/bin/sunshine-vdisplay-disconnect.sh","elevated":false},{"do":"/usr/local/bin/sunshine-unlock-prep.sh","undo":"/usr/local/bin/sunshine-unlock-undo.sh","elevated":false}]
