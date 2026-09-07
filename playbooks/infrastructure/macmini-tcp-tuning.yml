@@ -18,11 +18,20 @@
 # persists across reboots via /etc/sysctl.conf, matching the existing
 # net.inet.ip.forwarding pattern for this host in setup-macmini.yml.
 #
+# Also installs the native com.local.tcp-textfile-exporter LaunchDaemon
+# (component of komodo-dean-gitops PR #251) that feeds Prometheus the
+# TCP-exhaustion alert added there — no containerized exporter can see
+# macOS's real netinet stack, only a native process can (see that script's
+# header comment). Requires the komodo-dean-gitops checkout on the Mini to
+# already have that PR's files (git pull via the existing sync-stacks.sh
+# LaunchDaemon, or a manual `git pull` if run ahead of that).
+#
 # Usage:
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
 #
 # Idempotency check (run twice, second run should report changed=0 for the
-# persistent-config task and unchanged sysctl values on verify):
+# persistent-config and LaunchDaemon-install tasks, and unchanged sysctl
+# values on verify):
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
 #   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/macmini-tcp-tuning.yml
 
@@ -33,6 +42,10 @@
   tags: [macmini, tcp-tuning]
 
   vars:
+    target_user: "{{ ansible_user }}"
+    compose_dir: "/Users/{{ target_user }}/komodo-dean-gitops"
+    macmini_compose_dir: "{{ compose_dir }}/mac-mini-m4"
+    tcp_textfile_dir: "/Users/{{ target_user }}/monitoring/textfile-collector"
     macmini_tcp_tuning_params:
       # Default 49152 (IANA dynamic/private floor) leaves only 16383
       # ephemeral ports. 32768 is the common BSD/Linux ephemeral floor and
@@ -89,3 +102,68 @@
       loop: "{{ macmini_tcp_tuning_verify.results }}"
       loop_control:
         label: "{{ item.item.key }}"
+
+    - name: Require tcp-exhaustion-textfile-exporter.sh in GitOps checkout
+      ansible.builtin.stat:
+        path: "{{ macmini_compose_dir }}/scripts/tcp-exhaustion-textfile-exporter.sh"
+      register: tcp_textfile_script
+      tags: [mini-tcp-monitoring]
+
+    - name: Fail if tcp-exhaustion-textfile-exporter.sh is missing on the Mini
+      ansible.builtin.fail:
+        msg: >-
+          Expected {{ macmini_compose_dir }}/scripts/tcp-exhaustion-textfile-exporter.sh
+          (komodo-dean-gitops PR #251). Ensure {{ compose_dir }} exists and `git pull`
+          has picked up that PR (via sync-stacks.sh, or manually) before re-running with
+          --tags mini-tcp-monitoring.
+      when: not tcp_textfile_script.stat.exists
+      tags: [mini-tcp-monitoring]
+
+    - name: Create textfile-collector directory (bind-mounted into node-exporter)
+      ansible.builtin.file:
+        path: "{{ tcp_textfile_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        group: staff
+        mode: '0755'
+      tags: [mini-tcp-monitoring]
+
+    - name: Install tcp-textfile-exporter LaunchDaemon
+      ansible.builtin.copy:
+        src: "{{ macmini_compose_dir }}/launchd/com.local.tcp-textfile-exporter.plist"
+        dest: /Library/LaunchDaemons/com.local.tcp-textfile-exporter.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      tags: [mini-tcp-monitoring]
+
+    # Unload first so a plist edit is always picked up (a plain `load` on an
+    # already-loaded label is a no-op for the definition itself — same
+    # lesson as slzb-proxy/ollama in setup-macmini.yml).
+    - name: Restart tcp-textfile-exporter LaunchDaemon (force definition refresh)
+      ansible.builtin.shell: |
+        launchctl bootout system /Library/LaunchDaemons/com.local.tcp-textfile-exporter.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.tcp-textfile-exporter.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.tcp-textfile-exporter.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.tcp-textfile-exporter.plist
+      changed_when: false
+      tags: [mini-tcp-monitoring]
+
+    - name: Wait for mac_mini_tcp.prom to be written
+      ansible.builtin.wait_for:
+        path: "{{ tcp_textfile_dir }}/mac_mini_tcp.prom"
+        timeout: 60
+      tags: [mini-tcp-monitoring]
+
+    - name: Show current textfile-collector output
+      ansible.builtin.command:
+        cmd: "cat {{ tcp_textfile_dir }}/mac_mini_tcp.prom"
+      register: tcp_textfile_output
+      changed_when: false
+      tags: [mini-tcp-monitoring]
+
+    - name: Display textfile-collector output
+      ansible.builtin.debug:
+        msg: "{{ tcp_textfile_output.stdout_lines }}"
+      tags: [mini-tcp-monitoring]
