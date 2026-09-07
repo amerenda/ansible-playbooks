@@ -3,6 +3,19 @@
   ansible.builtin.command: udevadm control --reload-rules
   changed_when: false
 
+- name: Restart avahi-daemon
+  ansible.builtin.systemd:
+    name: avahi-daemon
+    state: restarted
+
+# Must run after "Restart avahi-daemon" (handlers fire in definition order,
+# not notify order) -- Sunshine's own avahi_client connection doesn't
+# survive avahi-daemon restarting out from under it and won't
+# automatically re-register its _nvstream._tcp service, so an avahi
+# restart alone silently stops discovery until Sunshine itself restarts
+# too. Found live 2026-09-06: after flipping use-ipv6, avahi-daemon
+# restarted but avahi-browse showed nothing at all until Sunshine was
+# also restarted.
 - name: Restart sunshine service
   ansible.builtin.systemd:
     name: app-dev.lizardbyte.app.Sunshine.service

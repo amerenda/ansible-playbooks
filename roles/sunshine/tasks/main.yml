@@ -185,6 +185,37 @@
     comment: "mDNS discovery (Sunshine/Moonlight)"
   tags: [sunshine, mdns]
 
+# The UFW rule above fixed the transport, but Moonlight-qt still failed to
+# connect after discovering the host -- diagnosed 2026-09-06 via
+# moonlight-qt's own stdout log: it discovered "archlinux-4.local." over
+# mDNS and resolved it, but the ONLY address avahi handed back in that
+# resolution was this host's auto-assigned IPv6 ULA (fd00::/8, e.g.
+# fd84:dede:...), not its IPv4 address -- even though the raw mDNS
+# response packet (confirmed via tcpdump) carries both the A and AAAA
+# records together. moonlight-qt's connection code explicitly skips ULA
+# addresses when picking a "global IPv6" address (see
+# ComputerManager::getBestGlobalAddressV6 in its source), but still falls
+# back to using that same ULA as the connection address when no IPv4
+# candidate came back from its resolver -- and that ULA is a per-interface
+# autoconfigured address with no route from any other host on the LAN
+# (confirmed: connecting to it from lemurpro fails immediately with
+# "Network is unreachable", not a timeout). Disabling IPv6 in avahi
+# forces it to publish/answer IPv4-only, sidestepping whatever specific
+# quirk in Moonlight's mDNS resolver was preferring or exclusively
+# returning the unusable ULA. Scoped to archlinux only -- this is about
+# what the Sunshine *host* publishes, not anything on Moonlight-client
+# hosts like lemurpro.
+- name: Disable IPv6 in avahi so Sunshine's mDNS record only advertises the reachable IPv4 address
+  ansible.builtin.lineinfile:
+    path: /etc/avahi/avahi-daemon.conf
+    regexp: '^use-ipv6='
+    line: 'use-ipv6=no'
+  when: inventory_hostname == 'archlinux'
+  notify:
+    - Restart avahi-daemon
+    - Restart sunshine service
+  tags: [sunshine, mdns]
+
 # ── Udev / cap_sys_admin ───────────────────────────────────────────────────────
 
 - name: Add udev rule so Sunshine can access /dev/uinput without root
