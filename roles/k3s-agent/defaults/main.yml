@@ -1,0 +1,25 @@
+---
+k3s_agent_data_dir: /var/lib/rancher/k3s
+
+k3s_agent_kubelet_args:
+  - "max-pods=110"
+  - "kube-reserved=cpu=50m,memory=128Mi"
+  - "system-reserved=cpu=50m,memory=128Mi"
+  - "eviction-hard=memory.available<100Mi"
+  - "eviction-soft=memory.available<200Mi"
+  - "eviction-soft-grace-period=memory.available=2m"
+
+k3s_agent_node_labels:
+  - "longhorn.io/storage=true"
+  - "longhorn-storage=true"
+
+# Set to a directory on fast local storage (e.g. an SSD) to move containerd's
+# metadata boltdb (meta.db) off this host's data-dir volume. Leave empty
+# (default) to keep meta.db alongside the rest of containerd's data, which is
+# fine unless that volume is slow/high-latency (e.g. spinning-disk RAID) --
+# boltdb's random small-page I/O pattern pairs badly with that. See the
+# 2026-09-08 murderbot NotReady incident for the failure mode this guards
+# against: containerd generates a message that exceeds the 16MiB CRI response
+# cap, which combined with a bloated meta.db can slow containerd's boot to a
+# crawl.
+k3s_agent_containerd_meta_ssd_dir: ""

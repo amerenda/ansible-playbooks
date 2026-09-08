@@ -1,0 +1,34 @@
+---
+# Bring murderbot's existing k3s-agent installation under Ansible management.
+#
+# murderbot was originally joined to the cluster via a bare `k3s agent`
+# install (K3S_URL/K3S_TOKEN env vars) outside this repo -- data-dir and the
+# containerd meta.db SSD split existed only as live configuration drift until
+# now. This applies roles/k3s-agent to it directly (murderbot is Debian, not
+# CachyOS/Arch, so it doesn't belong in setup-cachyos.yml alongside
+# archlinux). See inventory/host_vars/murderbot.yml for the host-specific
+# overrides that keep this from changing anything beyond the intended
+# data-dir/containerd fix (murderbot opts out of the role's default Longhorn
+# node-labels and kubelet eviction args).
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/murderbot-k3s-agent.yml \
+#     --extra-vars "bws_access_token=$BWS_RO_TOKEN"
+#
+# Before the first real run: diff inventory/host_vars/murderbot.yml against
+# the host's live /etc/rancher/k3s/config.yaml and
+# /etc/systemd/system/k3s-agent.service.env to confirm nothing has drifted
+# since 2026-09-08.
+
+- name: Fetch k3s token from BWS
+  import_playbook: fetch-secrets.yml
+
+- name: murderbot — bring k3s-agent under Ansible management
+  hosts: murderbot
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: ../../roles/k3s-agent
+      tags: [k3s-agent]

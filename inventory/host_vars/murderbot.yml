@@ -1,0 +1,39 @@
+---
+# murderbot's k3s-agent join was originally done via a bare `k3s agent`
+# install (K3S_URL/K3S_TOKEN env vars) outside this repo -- these vars bring
+# its live configuration under roles/k3s-agent's management for the first
+# time. Values below were captured directly from the live host
+# (/etc/rancher/k3s/config.yaml, /etc/systemd/system/k3s-agent.service.env,
+# `kubectl get nodes`) on 2026-09-08 -- diff against current live state
+# before ever running this against the host.
+#
+# cachyos_k3s_* names are reused as-is from roles/k3s-agent's existing
+# convention (group_vars/cachyos_workstations.yml) even though murderbot is
+# Debian, not CachyOS -- kept for consistency with the template rather than
+# introducing a parallel naming scheme for one host.
+cachyos_k3s_version: "v1.33.5+k3s1"
+cachyos_k3s_server: "https://10.100.20.10:6443"
+cachyos_k3s_node_name: "{{ inventory_hostname }}"
+cachyos_k3s_node_ip: "10.100.20.19"
+
+# murderbot's data-dir has always been on its RAID array (/mnt/storage), not
+# the k3s default -- this is what caused containerd's meta.db to end up on
+# slow storage in the first place. See the containerd_meta_ssd_dir override
+# below for the fix.
+k3s_agent_data_dir: /mnt/storage/k3s-agent
+
+# murderbot's live config.yaml has none of roles/k3s-agent's default Longhorn
+# node-labels or kubelet eviction/reservation args -- opt out of both so
+# bringing this host under the role doesn't silently change its behavior
+# (Longhorn labels in particular could make Longhorn start scheduling storage
+# replicas onto murderbot, which is not the intent here).
+k3s_agent_kubelet_args: []
+k3s_agent_node_labels: []
+
+# Root cause fix for the 2026-09-08 murderbot NotReady incident: containerd's
+# meta.db lives on the SSD (this host's root filesystem, /dev/nvme0n1p2), not
+# the RAID5 array at k3s_agent_data_dir -- boltdb's random small-page I/O
+# pattern pairs badly with that array's throughput. See
+# roles/k3s-agent/templates/containerd-config.toml.tmpl.j2 for the full
+# incident background.
+k3s_agent_containerd_meta_ssd_dir: /var/lib/containerd-meta-ssd
