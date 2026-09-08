@@ -956,10 +956,18 @@
       become: no
       tags: [mini-ollama]
 
+    # `ollama list` always shows a resolved tag (e.g. nomic-embed-text:latest)
+    # even when ollama_models / `ollama pull` used the bare, tag-less name —
+    # compare both the raw name and the tag stripped of a trailing ":latest"
+    # against the desired list, or a bare-named desired entry never matches
+    # and gets deleted (happened 2026-09-08: nomic-embed-text, a required
+    # mem0/LiteLLM dependency, was wrongly removed on first run of this task).
     - name: Remove Ollama models not in desired list
       command: "{{ homebrew_bin }}/ollama rm {{ item }}"
       loop: "{{ ollama_installed_names }}"
-      when: item not in ollama_models
+      when:
+        - item not in ollama_models
+        - (item | regex_replace(':latest$', '')) not in ollama_models
       become: no
       tags: [mini-ollama]
 
