@@ -184,3 +184,16 @@
     mode: "0644"
   notify: Reload udev rules
   tags: [hardware-tweaks, udev]
+
+# ── IPv6 ─────────────────────────────────────────────────────────────────────
+# See tasks/disable-broken-ipv6.yml (repo root) for the full explanation.
+# Scoped to archlinux only within this role -- this host has no real
+# upstream IPv6 to lose either way; not assuming the same is true for other
+# cachyos_workstations members (e.g. lemurpro) without checking. murderbot
+# and the Pi k3s nodes get the same shared task from their own playbooks
+# (setup-debian-komodo.yml, setup-rpi.yml) since hardware-tweaks itself only
+# runs on cachyos_workstations.
+- name: Disable broken LAN-ULA IPv6 (archlinux)
+  ansible.builtin.include_tasks: ../../../tasks/disable-broken-ipv6.yml
+  when: inventory_hostname == 'archlinux'
+  tags: [hardware-tweaks, network, ipv6]

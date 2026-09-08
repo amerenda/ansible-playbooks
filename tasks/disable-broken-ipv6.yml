@@ -1,0 +1,81 @@
+---
+# Shared task: disable a non-routable IPv6 address that causes real,
+# user-visible page-load slowness.
+#
+# Background: the EdgeRouter advertises a ULA prefix (fd84:dede:.../64) via
+# Router Advertisements on the whole LAN, so every host on this network
+# autoconfigures a "global-looking" IPv6 address even though there is no
+# real IPv6 default route (confirmed via `ip -6 route show default` being
+# empty and a raw connect to any real global IPv6 address failing instantly
+# with "Network is unreachable", not a timeout). Because a non-link-local
+# IPv6 address is present at all, glibc's getaddrinfo (AI_ADDRCONFIG) and
+# browser Happy-Eyeballs logic both treat IPv6 as viable and try every AAAA
+# record a site returns (e.g. 8 for google.com) before falling back to
+# IPv4 -- each attempt fails fast, but across the many third-party domains a
+# real page loads, it compounds into real slowness (measured 2026-09-07:
+# ~30% slower dual-stack vs IPv4-only across 10 typical subresource
+# domains on archlinux; same signature reproduced on murderbot, rpi5-0,
+# rpi5-1, and rpi4-0 -- see
+# Projects/Network/notes/network-audit-2026-09-07.md in the Dean vault).
+# mac-mini-m4 is deliberately NOT included anywhere this task is invoked --
+# it has genuine working IPv6 (comparable v4/v6 timing in the same audit),
+# routed via a VPN tunnel interface rather than this LAN's broken ULA, so
+# disabling IPv6 there would remove real connectivity, not a phantom one.
+#
+# nmcli connection show/modify take the connection *name*, not the
+# interface/device name, and that name varies by host (netplan-managed
+# Ubuntu hosts use "netplan-eth0"; Raspberry Pi OS / Arch / Debian default
+# to "Wired connection 1") -- resolved dynamically here rather than
+# assumed, the same way playbooks/infrastructure/set-static-ip.yml does.
+#
+# Deliberately does NOT use ansible_facts.default_ipv4.interface: this task
+# is included from playbooks (e.g. setup-rpi.yml) whose *play* declares its
+# own `tags:` list, which Ansible inherits onto every child task including
+# the implicit Gathering Facts step -- run with `--tags <something not in
+# that list>` and gather_facts silently doesn't populate ansible_facts at
+# all (empty dict, not undefined), even though this task's own tags still
+# matched. Shelling out to `ip route` directly makes this task's scoping
+# independent of the including play's tag setup.
+
+- name: "disable-broken-ipv6: determine the default IPv4 interface"
+  ansible.builtin.command:
+    cmd: sh -c "ip -4 route show default | awk '{for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1)}' | head -n1"
+  register: dbi6_default_iface
+  changed_when: false
+  tags: [network, ipv6]
+
+- name: "disable-broken-ipv6: get active NetworkManager connections"
+  ansible.builtin.command:
+    cmd: nmcli -t -f NAME,DEVICE connection show --active
+  register: dbi6_nm_active_connections
+  changed_when: false
+  tags: [network, ipv6]
+
+- name: "disable-broken-ipv6: identify the active connection profile on the default interface"
+  ansible.builtin.set_fact:
+    dbi6_nm_conn_name: >-
+      {{ (dbi6_nm_active_connections.stdout_lines
+          | select('search', ':' + dbi6_default_iface.stdout + '$')
+          | list | first).split(':')[0] }}
+  tags: [network, ipv6]
+
+- name: "disable-broken-ipv6: get current ipv6.method on that connection"
+  ansible.builtin.command:
+    cmd: nmcli -g ipv6.method connection show "{{ dbi6_nm_conn_name }}"
+  register: dbi6_ipv6_method_current
+  changed_when: false
+  tags: [network, ipv6]
+
+- name: "disable-broken-ipv6: disable IPv6 on the wired connection"
+  ansible.builtin.command:
+    cmd: nmcli connection modify "{{ dbi6_nm_conn_name }}" ipv6.method disabled
+  when: dbi6_ipv6_method_current.stdout | default('') != 'disabled'
+  register: dbi6_ipv6_disabled
+  tags: [network, ipv6]
+
+- name: "disable-broken-ipv6: reapply the connection so the IPv6 change takes effect"
+  ansible.builtin.command:
+    cmd: nmcli connection up "{{ dbi6_nm_conn_name }}"
+  when: dbi6_ipv6_disabled is changed
+  changed_when: false
+  tags: [network, ipv6]

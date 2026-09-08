@@ -157,6 +157,15 @@
         timeout: 10
       tags: [network, static-ip]
 
+    # ─── IPv6 ────────────────────────────────────────────────────────────────
+    # rpi5-0, rpi5-1, and rpi4-0 all autoconfigure the same non-routable LAN
+    # ULA IPv6 address as archlinux (RA-advertised by the EdgeRouter, no real
+    # default route) -- confirmed 2026-09-07, same failure signature on all
+    # three. See tasks/disable-broken-ipv6.yml for the full explanation.
+    - name: Disable broken LAN-ULA IPv6
+      ansible.builtin.include_tasks: ../../tasks/disable-broken-ipv6.yml
+      tags: [network, ipv6]
+
     # DNS Configuration (from common-setup.yml)
     - name: Check if systemd-resolved service exists
       systemd:
