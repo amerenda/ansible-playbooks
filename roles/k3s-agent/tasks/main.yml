@@ -41,6 +41,93 @@
   notify: Restart k3s-agent
   tags: [k3s-agent, config]
 
+# --- containerd meta.db SSD split (only when k3s_agent_containerd_meta_ssd_dir is set) ---
+# See roles/k3s-agent/defaults/main.yml for why this exists, and
+# templates/containerd-config.toml.tmpl.j2 for full background.
+
+- name: Ensure containerd data directory exists (for meta.db SSD split)
+  ansible.builtin.file:
+    path: "{{ k3s_agent_data_dir }}/agent/containerd/io.containerd.metadata.v1.bolt"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  tags: [k3s-agent, containerd, storage]
+
+- name: Ensure containerd config directory exists (for config.toml.tmpl override)
+  ansible.builtin.file:
+    path: "{{ k3s_agent_data_dir }}/agent/etc/containerd"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  tags: [k3s-agent, containerd, config]
+
+- name: Ensure SSD-side containerd metadata directory exists
+  ansible.builtin.file:
+    path: "{{ k3s_agent_containerd_meta_ssd_dir }}/io.containerd.metadata.v1.bolt"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  tags: [k3s-agent, containerd, storage]
+
+- name: Check current state of containerd meta.db on the data-dir volume
+  ansible.builtin.stat:
+    path: "{{ k3s_agent_data_dir }}/agent/containerd/io.containerd.metadata.v1.bolt/meta.db"
+  register: k3s_agent_meta_db_stat
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  tags: [k3s-agent, containerd, storage]
+
+- name: One-time migration — move an existing meta.db to SSD before symlinking
+  when:
+    - k3s_agent_containerd_meta_ssd_dir | length > 0
+    - k3s_agent_meta_db_stat.stat.exists | default(false)
+    - not (k3s_agent_meta_db_stat.stat.islnk | default(false))
+  tags: [k3s-agent, containerd, storage]
+  block:
+    - name: Stop k3s-agent before touching a live meta.db
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: stopped
+
+    - name: Copy existing meta.db to its new SSD home
+      ansible.builtin.command:
+        cmd: >-
+          cp --preserve=all
+          {{ k3s_agent_data_dir }}/agent/containerd/io.containerd.metadata.v1.bolt/meta.db
+          {{ k3s_agent_containerd_meta_ssd_dir }}/io.containerd.metadata.v1.bolt/meta.db
+        creates: "{{ k3s_agent_containerd_meta_ssd_dir }}/io.containerd.metadata.v1.bolt/meta.db"
+
+    - name: Remove the original meta.db now that it's safely copied
+      ansible.builtin.file:
+        path: "{{ k3s_agent_data_dir }}/agent/containerd/io.containerd.metadata.v1.bolt/meta.db"
+        state: absent
+
+- name: Symlink containerd meta.db to its SSD home
+  ansible.builtin.file:
+    src: "{{ k3s_agent_containerd_meta_ssd_dir }}/io.containerd.metadata.v1.bolt/meta.db"
+    dest: "{{ k3s_agent_data_dir }}/agent/containerd/io.containerd.metadata.v1.bolt/meta.db"
+    state: link
+    force: true
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  notify: Restart k3s-agent
+  tags: [k3s-agent, containerd, storage]
+
+- name: Deploy containerd config.toml.tmpl override (grpc size bump + meta.db SSD split)
+  ansible.builtin.template:
+    src: containerd-config.toml.tmpl.j2
+    dest: "{{ k3s_agent_data_dir }}/agent/etc/containerd/config.toml.tmpl"
+    owner: root
+    group: root
+    mode: "0644"
+  when: k3s_agent_containerd_meta_ssd_dir | length > 0
+  notify: Restart k3s-agent
+  tags: [k3s-agent, containerd, config]
+
 - name: Enable and start k3s-agent service
   ansible.builtin.systemd:
     name: k3s-agent

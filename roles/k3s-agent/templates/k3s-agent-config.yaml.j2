@@ -7,17 +7,19 @@ token: "{{ hostvars['localhost']['k3s_token'] }}"
 node-name: "{{ cachyos_k3s_node_name }}"
 node-ip: "{{ cachyos_k3s_node_ip }}"
 
-data-dir: "/var/lib/rancher/k3s"
+data-dir: "{{ k3s_agent_data_dir }}"
 log: "/var/log/k3s-agent.log"
 
+{% if k3s_agent_kubelet_args | length > 0 %}
 kubelet-arg:
-  - "max-pods=110"
-  - "kube-reserved=cpu=50m,memory=128Mi"
-  - "system-reserved=cpu=50m,memory=128Mi"
-  - "eviction-hard=memory.available<100Mi"
-  - "eviction-soft=memory.available<200Mi"
-  - "eviction-soft-grace-period=memory.available=2m"
+{% for arg in k3s_agent_kubelet_args %}
+  - "{{ arg }}"
+{% endfor %}
+{% endif %}
 
+{% if k3s_agent_node_labels | length > 0 %}
 node-label:
-  - "longhorn.io/storage=true"
-  - "longhorn-storage=true"
+{% for label in k3s_agent_node_labels %}
+  - "{{ label }}"
+{% endfor %}
+{% endif %}
