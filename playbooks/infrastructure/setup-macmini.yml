@@ -20,7 +20,7 @@
 #   mini-orbstack   — Start and configure OrbStack
 #   mini-secrets    — Fetch secrets from Bitwarden, write to disk
 #   mini-komodo     — Clone compose repo, deploy Komodo, bootstrap GitOps
-#   mini-ollama     — Install native Ollama, LaunchDaemon, pull models
+#   mini-ollama     — Install native Ollama, LaunchDaemon, enforce desired model list, log rotation
 #   mini-tailscale  — Tailscale VPN setup
 #   mini-bluebubbles — Install BlueBubbles iMessage proxy
 #   mini-dns        — pf DNS redirect + dns-udp-proxy.py for Technitium (no BWS token needed)
@@ -944,6 +944,65 @@
       loop: "{{ ollama_models }}"
       when: item not in ollama_models_installed.stdout
       become: no
+      tags: [mini-ollama]
+
+    # ollama_models in group_vars/macmini_hosts.yml is enforced desired state,
+    # not just a pull list — a model pulled by hand outside that list (how
+    # 12 unlisted models / ~45GB of stale pre-murderbot-migration weights
+    # accumulated, found 2026-09-08) gets removed on the next run.
+    - name: Parse installed Ollama model names
+      set_fact:
+        ollama_installed_names: "{{ ollama_models_installed.stdout_lines[1:] | map('regex_replace', '^(\\S+)\\s.*$', '\\1') | reject('equalto', '') | list }}"
+      become: no
+      tags: [mini-ollama]
+
+    - name: Remove Ollama models not in desired list
+      command: "{{ homebrew_bin }}/ollama rm {{ item }}"
+      loop: "{{ ollama_installed_names }}"
+      when: item not in ollama_models
+      become: no
+      tags: [mini-ollama]
+
+    # ollama.log (StandardOutPath/StandardErrorPath above) has no native
+    # rotation and grew to 16GB unbounded before this existed. RunAtLoad
+    # means the first install of this LaunchDaemon immediately rotates
+    # whatever oversized log is currently on disk. See
+    # mac-mini-m4/scripts/ollama-log-rotate.sh for the rotation logic
+    # (same bootout+bootstrap-of-com.local.ollama technique as slzb-proxy's
+    # kickstart pattern below).
+    - name: Install ollama-log-rotate LaunchDaemon
+      copy:
+        src: "{{ macmini_compose_dir }}/launchd/com.local.ollama-log-rotate.plist"
+        dest: /Library/LaunchDaemons/com.local.ollama-log-rotate.plist
+        owner: root
+        group: wheel
+        mode: '0644'
+        remote_src: yes
+      become: yes
+      tags: [mini-ollama]
+
+    - name: Restart ollama-log-rotate LaunchDaemon (force definition refresh)
+      shell: |
+        launchctl bootout system /Library/LaunchDaemons/com.local.ollama-log-rotate.plist 2>/dev/null || \
+          launchctl unload /Library/LaunchDaemons/com.local.ollama-log-rotate.plist 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/com.local.ollama-log-rotate.plist 2>/dev/null || \
+          launchctl load /Library/LaunchDaemons/com.local.ollama-log-rotate.plist
+      become: yes
+      changed_when: false
+      tags: [mini-ollama]
+
+    # sync-stacks.sh kickstarts ollama-log-rotate after git pull when
+    # ollama-log-rotate.sh changes, so code fixes take effect without a
+    # manual SSH restart (same rationale as the slzb-proxy rule below).
+    - name: Allow user to kickstart ollama-log-rotate after host gitops sync (passwordless)
+      ansible.builtin.copy:
+        content: "{{ target_user }} ALL=(root) NOPASSWD: /bin/launchctl kickstart -k system/com.local.ollama-log-rotate\n"
+        dest: "/etc/sudoers.d/{{ target_user }}-komodo-ollama-log-rotate-kickstart"
+        owner: root
+        group: wheel
+        mode: "0440"
+        validate: "/usr/sbin/visudo -cf %s"
+      become: yes
       tags: [mini-ollama]
 
     # ─── Tailscale ─────────────────────────────────────────────────────────
