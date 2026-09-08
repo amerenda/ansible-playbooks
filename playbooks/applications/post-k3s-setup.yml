@@ -62,6 +62,16 @@
         var: cluster_nodes.stdout_lines
       tags: [info, nodes]
 
+    - name: Clone gitops repo
+      git:
+        repo: "{{ gitops_repo }}"
+        dest: "{{ gitops_local_path }}"
+        version: main
+        force: yes
+      delegate_to: localhost
+      become: no
+      tags: [argocd, helm, bootstrap]
+
     - name: Add ArgoCD Helm repository
       kubernetes.core.helm_repository:
         name: argo
@@ -102,16 +112,6 @@
       become: no
       remote_user: "{{ local_user }}"
       tags: [argocd, wait]
-
-    - name: Clone gitops repo
-      git:
-        repo: "{{ gitops_repo }}"
-        dest: "{{ gitops_local_path }}"
-        version: main
-        force: yes
-      delegate_to: localhost
-      become: no
-      tags: [argocd, bootstrap]
 
     - name: Clone k3s-runners repo
       git:
