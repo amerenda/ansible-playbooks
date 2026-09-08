@@ -184,3 +184,72 @@
     mode: "0644"
   notify: Reload udev rules
   tags: [hardware-tweaks, udev]
+
+# ── IPv6 ─────────────────────────────────────────────────────────────────────
+# The EdgeRouter advertises a ULA prefix (fd84:dede:.../64) over Router
+# Advertisements on the LAN, so this host autoconfigures a "global-looking"
+# IPv6 address even though there's no actual IPv6 default route -- confirmed
+# via `ip -6 route show default` (empty) and a raw connect to any real global
+# IPv6 address failing immediately with "Network is unreachable", not a
+# timeout. Same ULA already broke Moonlight discovery once (see
+# roles/sunshine's avahi use-ipv6=no task) because avahi/moonlight-qt
+# preferred the unreachable ULA over IPv4. Because a non-link-local IPv6
+# address is present at all, glibc's getaddrinfo (AI_ADDRCONFIG) and browser
+# Happy-Eyeballs logic both treat IPv6 as viable and try every AAAA record a
+# site returns (e.g. 8 for google.com) before falling back to IPv4 -- each
+# attempt fails fast, but across the many third-party domains a real page
+# loads, it compounds into real, user-visible page-load slowness (measured
+# 2026-09-07: ~30% slower dual-stack vs IPv4-only across 10 typical
+# subresource domains). Disabling IPv6 on the wired connection removes the
+# ULA address entirely, so getaddrinfo skips AAAA lookups and every
+# connection goes straight to IPv4. Scoped to archlinux only -- this host has
+# no real upstream IPv6 to lose either way; not assuming the same is true for
+# other cachyos_workstations members (e.g. lemurpro) without checking.
+#
+# nmcli connection show/modify take the connection *name* (e.g. "Wired
+# connection 1"), not the interface/device name -- resolved dynamically the
+# same way playbooks/infrastructure/set-static-ip.yml does, rather than
+# assuming a name, since it's just a NetworkManager-generated default that
+# could differ or get renamed.
+- name: Get active NetworkManager connections
+  ansible.builtin.command:
+    cmd: nmcli -t -f NAME,DEVICE connection show --active
+  register: archlinux_nm_active_connections
+  changed_when: false
+  when: inventory_hostname == 'archlinux'
+  tags: [hardware-tweaks, network, ipv6]
+
+- name: Identify the active connection profile on the default interface
+  ansible.builtin.set_fact:
+    archlinux_nm_conn_name: >-
+      {{ (archlinux_nm_active_connections.stdout_lines
+          | select('search', ':' + ansible_facts.default_ipv4.interface + '$')
+          | list | first).split(':')[0] }}
+  when: inventory_hostname == 'archlinux'
+  tags: [hardware-tweaks, network, ipv6]
+
+- name: Get current ipv6.method on that connection
+  ansible.builtin.command:
+    cmd: nmcli -g ipv6.method connection show "{{ archlinux_nm_conn_name }}"
+  register: archlinux_ipv6_method_current
+  changed_when: false
+  when: inventory_hostname == 'archlinux'
+  tags: [hardware-tweaks, network, ipv6]
+
+- name: Disable IPv6 on the wired connection
+  ansible.builtin.command:
+    cmd: nmcli connection modify "{{ archlinux_nm_conn_name }}" ipv6.method disabled
+  when:
+    - inventory_hostname == 'archlinux'
+    - archlinux_ipv6_method_current.stdout | default('') != 'disabled'
+  register: archlinux_ipv6_disabled
+  tags: [hardware-tweaks, network, ipv6]
+
+- name: Reapply the wired connection so the IPv6 change takes effect
+  ansible.builtin.command:
+    cmd: nmcli connection up "{{ archlinux_nm_conn_name }}"
+  when:
+    - inventory_hostname == 'archlinux'
+    - archlinux_ipv6_disabled is changed
+  changed_when: false
+  tags: [hardware-tweaks, network, ipv6]
