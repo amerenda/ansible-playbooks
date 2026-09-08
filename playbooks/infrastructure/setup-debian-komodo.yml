@@ -61,6 +61,15 @@
       tags: [always]
 
   tasks:
+    # ─── IPv6 ────────────────────────────────────────────────────────────────
+    # murderbot autoconfigures the same non-routable LAN ULA IPv6 address as
+    # archlinux (RA-advertised by the EdgeRouter, no real default route) --
+    # confirmed 2026-09-07, same failure signature. See
+    # tasks/disable-broken-ipv6.yml for the full explanation.
+    - name: Disable broken LAN-ULA IPv6
+      ansible.builtin.include_tasks: ../../tasks/disable-broken-ipv6.yml
+      tags: [debian-komodo, network, ipv6]
+
     - name: Resolve media path defaults
       ansible.builtin.set_fact:
         media_config_root_effective: "{{ lookup('vars', 'media_config_root', default='/mnt/storage/media/config') }}"
