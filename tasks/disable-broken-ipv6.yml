@@ -27,6 +27,22 @@
 # Ubuntu hosts use "netplan-eth0"; Raspberry Pi OS / Arch / Debian default
 # to "Wired connection 1") -- resolved dynamically here rather than
 # assumed, the same way playbooks/infrastructure/set-static-ip.yml does.
+#
+# Deliberately does NOT use ansible_facts.default_ipv4.interface: this task
+# is included from playbooks (e.g. setup-rpi.yml) whose *play* declares its
+# own `tags:` list, which Ansible inherits onto every child task including
+# the implicit Gathering Facts step -- run with `--tags <something not in
+# that list>` and gather_facts silently doesn't populate ansible_facts at
+# all (empty dict, not undefined), even though this task's own tags still
+# matched. Shelling out to `ip route` directly makes this task's scoping
+# independent of the including play's tag setup.
+
+- name: "disable-broken-ipv6: determine the default IPv4 interface"
+  ansible.builtin.command:
+    cmd: sh -c "ip -4 route show default | awk '{for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1)}' | head -n1"
+  register: dbi6_default_iface
+  changed_when: false
+  tags: [network, ipv6]
 
 - name: "disable-broken-ipv6: get active NetworkManager connections"
   ansible.builtin.command:
@@ -39,7 +55,7 @@
   ansible.builtin.set_fact:
     dbi6_nm_conn_name: >-
       {{ (dbi6_nm_active_connections.stdout_lines
-          | select('search', ':' + ansible_facts.default_ipv4.interface + '$')
+          | select('search', ':' + dbi6_default_iface.stdout + '$')
           | list | first).split(':')[0] }}
   tags: [network, ipv6]
 
