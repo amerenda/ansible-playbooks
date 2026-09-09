@@ -1,0 +1,13 @@
+[Unit]
+Description=Prune unreferenced k3s/containerd images
+Documentation=https://github.com/amerenda/ansible-playbooks
+After=k3s.service k3s-agent.service
+ConditionPathExists=/usr/local/bin/k3s
+ConditionPathExists=/usr/local/sbin/k3s-image-gc.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/k3s-image-gc.sh
+# Pi SD-card/eMMC I/O under load with hundreds of layers, each removal
+# call now allowed up to 120s (see the script) worst case; give it room.
+TimeoutStartSec=1800

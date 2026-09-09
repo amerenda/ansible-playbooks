@@ -1,0 +1,17 @@
+#!/bin/bash
+# Prunes k3s/containerd images no longer referenced by any container.
+#
+# Deployed by playbooks/infrastructure/k3s-image-gc.yml -- see that file's
+# header for background, including why /etc/crictl.yaml (deployed
+# alongside this script) is required for `k3s crictl` to work at all on
+# some hosts, and why it sets a 120s timeout.
+
+set -euo pipefail
+
+echo "[k3s-image-gc] $(date -Is) starting -- root fs: $(df -h / | tail -1)"
+echo "[k3s-image-gc] images before: $(k3s crictl images -q | wc -l)"
+
+k3s crictl rmi --prune
+
+echo "[k3s-image-gc] images after: $(k3s crictl images -q | wc -l)"
+echo "[k3s-image-gc] $(date -Is) done -- root fs: $(df -h / | tail -1)"

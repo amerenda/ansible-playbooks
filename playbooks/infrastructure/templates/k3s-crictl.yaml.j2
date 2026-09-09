@@ -1,0 +1,7 @@
+runtime-endpoint: "{{ k3s_image_gc_endpoint }}"
+image-endpoint: "{{ k3s_image_gc_endpoint }}"
+# Default is 2s -- too short for `crictl rmi --prune` removing 100+ layers
+# on Pi SD-card/eMMC storage (see k3s-image-gc.yml header). Also benefits
+# every other crictl invocation on the host (diagnosis, etc).
+timeout: 120
+debug: false
