@@ -1,0 +1,165 @@
+---
+# Automatic k3s/containerd image garbage collection.
+#
+# Background: rpi5-1 (10.100.20.11) fired a disk-space alert on 2026-09-09.
+# Root cause was /var/lib/rancher/k3s/agent/containerd growing to 84G (of a
+# 117G root fs). `k3s crictl images` showed 339 images total, but
+# cross-referencing `k3s crictl ps -a` (running + exited containers) showed
+# only 53 were actually referenced by anything -- the other ~286 were dead
+# CI-tag layers (unique sha-tags per build across mycroft, infra-mcp,
+# praetor-webhook, actions-runner, mcp-server-kubernetes, ...) that
+# k3s/containerd never garbage-collects on its own once an image is tagged.
+# Only kubelet's disk-pressure image GC would eventually clean these up,
+# and only after crossing its default 85% high-watermark.
+#
+# rpi5-0 was trending the same way (226 images, 69% disk) when checked the
+# same day, so this is treated as a fleet-wide k3s node issue, not a
+# one-off for rpi5-1. Every k3s node gets it: Pi controllers/agents,
+# archlinux, and murderbot (murderbot isn't in the `k3s` inventory group --
+# see playbooks/infrastructure/murderbot-k3s-agent.yml -- hence the
+# `k3s:murderbot` host pattern below).
+#
+# Installs k3s-image-gc.sh + a systemd service/timer pair
+# (k3s-image-gc.timer, daily, Persistent=true so a missed run catches up
+# after reboot) that runs `k3s crictl rmi --prune` -- this only removes
+# images with zero container references (running or exited), so nothing
+# actively in use is touched; a since-descheduled workload just re-pulls
+# its image next time it runs. Also runs one prune immediately to reclaim
+# the space already wasted, rather than waiting for tonight's schedule.
+#
+# Also deploys /etc/crictl.yaml (didn't exist anywhere in the fleet before
+# this). Two things forced that:
+#  - `crictl`/`k3s crictl` (same multicall binary either way) hardcodes a
+#    config-file lookup and is fatal if it can't find one, even when
+#    --runtime-endpoint/--image-endpoint are passed explicitly on the CLI --
+#    tested directly, explicit flags do NOT suppress the mandatory lookup.
+#    Its default search path is /etc/crictl.yaml, which existing nowhere on
+#    this fleet, so it fell through to a k3s-version-namespaced data-dir
+#    path (.../data/<hash>/bin/crictl.yaml) that also doesn't exist -> fatal.
+#  - archlinux's k3s is wired to the *host* containerd at
+#    /run/containerd/containerd.sock, not k3s's embedded one at the usual
+#    /run/k3s/containerd/containerd.sock (see setup-archlinux-k3s.yml /
+#    setup-gpu-runtime.yml -- GPU passthrough needs the host runtime), so
+#    the two node types in this fleet need different runtime-endpoint
+#    values. Writing /etc/crictl.yaml per-host (detected by which socket
+#    actually exists) fixes both problems at once, and as a side effect
+#    fixes every other bare `crictl`/`k3s crictl` invocation on these hosts
+#    too, not just this timer's.
+#  - Also sets timeout: 120 in that same file (default is 2s -- far too
+#    short for `rmi --prune` removing 100+ layers on Pi SD-card/eMMC
+#    storage; nearly every RemoveImage call was hitting DeadlineExceeded
+#    and the prune was silently no-op'ing almost everything).
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-image-gc.yml
+#
+# Idempotency check (run twice): the unit-file/timer tasks should show
+# changed=0 on the second run. The "run an immediate prune now" task will
+# still show changed on every run -- that's intentional, it's an
+# operational trigger, not desired-state convergence.
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-image-gc.yml
+#   ansible-playbook -i inventory/inventory.ini playbooks/infrastructure/k3s-image-gc.yml
+
+- name: Deploy k3s/containerd image garbage collection
+  hosts: k3s:murderbot
+  become: yes
+  gather_facts: no
+  tags: [k3s, image-gc]
+
+  vars:
+    k3s_image_gc_schedule: "*-*-* 03:20:00"
+
+  tasks:
+    - name: Check for k3s's embedded containerd socket
+      ansible.builtin.stat:
+        path: /run/k3s/containerd/containerd.sock
+      register: k3s_image_gc_embedded_sock
+
+    - name: Check for a host containerd socket
+      ansible.builtin.stat:
+        path: /run/containerd/containerd.sock
+      register: k3s_image_gc_host_sock
+
+    - name: Determine this host's containerd runtime endpoint
+      ansible.builtin.set_fact:
+        k3s_image_gc_endpoint: >-
+          {{ 'unix:///run/k3s/containerd/containerd.sock'
+             if k3s_image_gc_embedded_sock.stat.exists
+             else 'unix:///run/containerd/containerd.sock' }}
+      failed_when: not (k3s_image_gc_embedded_sock.stat.exists or k3s_image_gc_host_sock.stat.exists)
+
+    - name: Deploy /etc/crictl.yaml
+      ansible.builtin.template:
+        src: templates/k3s-crictl.yaml.j2
+        dest: /etc/crictl.yaml
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Ensure /usr/local/sbin exists
+      ansible.builtin.file:
+        path: /usr/local/sbin
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy k3s-image-gc.sh
+      ansible.builtin.template:
+        src: templates/k3s-image-gc.sh.j2
+        dest: /usr/local/sbin/k3s-image-gc.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy k3s-image-gc.service
+      ansible.builtin.template:
+        src: templates/k3s-image-gc.service.j2
+        dest: /etc/systemd/system/k3s-image-gc.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: k3s_image_gc_service
+
+    - name: Deploy k3s-image-gc.timer
+      ansible.builtin.template:
+        src: templates/k3s-image-gc.timer.j2
+        dest: /etc/systemd/system/k3s-image-gc.timer
+        owner: root
+        group: root
+        mode: "0644"
+      register: k3s_image_gc_timer
+
+    - name: Reload systemd units
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: k3s_image_gc_service.changed or k3s_image_gc_timer.changed
+
+    - name: Enable and start k3s-image-gc.timer
+      ansible.builtin.systemd:
+        name: k3s-image-gc.timer
+        enabled: true
+        state: started
+
+    - name: Run an immediate prune now to reclaim already-wasted space
+      ansible.builtin.systemd:
+        name: k3s-image-gc.service
+        state: started
+
+    - name: Count images remaining after prune
+      ansible.builtin.command:
+        cmd: k3s crictl images -q
+      register: k3s_image_gc_remaining
+      changed_when: false
+
+    - name: Check root filesystem usage after prune
+      ansible.builtin.command:
+        cmd: df -h /
+      register: k3s_image_gc_df
+      changed_when: false
+
+    - name: Display post-prune state
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: {{ k3s_image_gc_remaining.stdout_lines | length }} images remaining"
+          - "{{ k3s_image_gc_df.stdout_lines[-1] }}"

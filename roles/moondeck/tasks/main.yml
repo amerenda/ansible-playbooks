@@ -1,16 +1,35 @@
 ---
 # Role: moondeck
-# MoonDeckBuddy — adds Steam Deck-like streaming features to Moonlight.
+# MoonDeckBuddy — paired HTTPS+WebSocket companion queried by the MoonDeck
+# SteamDeck plugin for Steam/PC state and control (NOT a Sunshine hook —
+# see Areas/Archlinux/notes/joystick-notify-sunshine-reenable-phase3-notes.md
+# in the Dean Obsidian vault for the full research). The actual game stream
+# is still a Sunshine stream (MoonDeck adds its own apps.json entry running
+# MoonDeckStream), so Sunshine's existing global_prep_cmd already covers
+# screen unlock for MoonDeck-launched games — this role does not need to
+# wire anything to joystick-notify's wizard API.
+#
 # Installed via AUR (moondeckbuddy-appimage, in cachyos_aur_packages — see
 # roles/desktop-apps for the paru install loop) into /usr/bin/MoonDeckBuddy
 # and /usr/bin/MoonDeckStream.
 #
-# This role only wires up the gamescope wrapper script and the systemd
-# --user service. MoonDeckBuddy binds :59999 and is queried by the Moonlight
-# client + Sunshine's local API — nothing launches it, so it needs its own
-# autostart, handled here rather than a manual per-shell launch (which is
-# fragile: a long-lived shell's DISPLAY/XAUTHORITY go stale across compositor
-# restarts, but systemd --user always has the current session's env).
+# This role wires up the gamescope wrapper script and the systemd --user
+# service. MoonDeckBuddy binds :59999 — nothing launches it, so it needs its
+# own autostart, handled here rather than a manual per-shell launch (which
+# is fragile: a long-lived shell's DISPLAY/XAUTHORITY go stale across
+# compositor restarts, but systemd --user always has the current session's
+# env).
+#
+# Headless by default (NO_GUI=true, matching the wiki's documented headless
+# mode) bound to default.target, not graphical-session.target — the paired
+# REST/WS API needs no display. MOONDECKBUDDY_NO_GUI is overridable via the
+# unit's environment for a one-off GUI/systray run (only needed to show the
+# PIN dialog when pairing a *new* client — pairing is a manual, occasional
+# action, not something this role automates). This mirrors the config
+# already live-tested on archlinux since 2026-07 (one client already
+# paired, confirmed via ~/.config/moondeckbuddy/clients.json) — the
+# previous version of this task rendered a GUI-session-bound unit that was
+# never actually what got deployed; this reconciles the drift.
 
 - name: Remove legacy /opt/moondeck raw-AppImage install (superseded by AUR package)
   ansible.builtin.file:
@@ -42,22 +61,24 @@
   ansible.builtin.copy:
     content: |
       [Unit]
-      Description=MoonDeckBuddy
-      After=graphical-session.target
-      PartOf=graphical-session.target
+      Description=MoonDeck host companion
+      After=default.target
 
       [Service]
-      ExecStart=/usr/bin/MoonDeckBuddy
+      Type=exec
+      ExecStart=/bin/sh -c 'NO_GUI="${MOONDECKBUDDY_NO_GUI:-true}" /usr/bin/MoonDeckBuddy'
       Restart=on-failure
-      RestartSec=5
+      RestartSec=10
+      SuccessExitStatus=143
 
       [Install]
-      WantedBy=graphical-session.target
+      WantedBy=default.target
     dest: "{{ cachyos_user_home }}/.config/systemd/user/moondeckbuddy.service"
     owner: "{{ cachyos_user }}"
     group: "{{ cachyos_user }}"
     mode: "0644"
   become: false
+  notify: Restart moondeckbuddy service
   tags: [moondeck, service]
 
 - name: Enable user lingering so systemd user instance runs without active login
