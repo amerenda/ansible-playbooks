@@ -23,3 +23,27 @@
       ansible.builtin.debug:
         msg: "Skipping Arch k3s prereqs — not Arch Linux ({{ ansible_distribution }})."
       when: ansible_distribution != 'Archlinux'
+
+    # ── Firewall (UFW) ─────────────────────────────────────────────────────
+    # archlinux is the only k3s node running ufw (cachyos_workstations role);
+    # its 37 rules were hand-authored for desktop apps (KDE Connect, Sunshine,
+    # etc.) and never opened flannel's VXLAN backend port. Confirmed via
+    # kernel log during INC-2026-09-11 (Incidents/2026-09-11-archlinux-local-
+    # ingress-drop.md): `[UFW BLOCK] IN=enp0s31f6 SRC=10.100.20.11
+    # DST=10.100.20.25 PROTO=UDP DPT=8472` — every inbound VXLAN packet from
+    # the rest of the cluster (e.g. the infra-traefik pod's node, rpi5-1) was
+    # being dropped on the physical NIC before flannel.1 could decapsulate
+    # it, even though the packet genuinely round-tripped over the wire (SYN
+    # out, remote RST back, correctly addressed) — the drop is local to this
+    # host, same failure class as the mDNS/UDP-5353 case in roles/sunshine.
+    # Scoped to the LAN subnet (not "Anywhere") since only cluster peers need
+    # this, unlike KDE Connect/Sunshine which must also work over Tailscale.
+    - name: Allow flannel VXLAN (UDP 8472) through UFW from the cluster LAN
+      community.general.ufw:
+        rule: allow
+        port: "8472"
+        proto: udp
+        src: "10.100.20.0/24"
+        comment: "flannel VXLAN (k3s overlay)"
+      when: inventory_hostname == 'archlinux'
+      tags: [archlinux, k3s, ufw]
