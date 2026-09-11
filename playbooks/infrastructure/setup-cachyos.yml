@@ -17,7 +17,7 @@
 # Tags (run subsections independently):
 #   common, kde, amd-gpu, gaming, docker, desktop-apps,
 #   ssh-keys, dotfiles, hardware-tweaks, mouse-hide, power-profiles, moondeck,
-#   sunshine, joystick-notify, k3s-agent, komodo, restic
+#   sunshine, joystick-notify, k3s-agent, komodo, restic, auto-updates
 #
 # Hard constraints:
 #   - /mnt/storage is never touched
@@ -145,6 +145,23 @@
   roles:
     - role: ../../roles/power-profiles
       tags: [power-profiles]
+
+# ── Play 5c: Automatic daily updates (unattended pacman -Syu + rollback) ──────
+# Areas/Archlinux/Plans/auto-updates.md (Obsidian) has the full design. Scope
+# guard: this play applies to the whole cachyos_workstations group by
+# default (archlinux + lemurpro) — until validated, every run against real
+# infrastructure must pass --limit archlinux.
+
+- name: CachyOS — automatic daily updates
+  hosts: cachyos_workstations
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../group_vars/cachyos_workstations.yml
+
+  roles:
+    - role: ../../roles/auto-updates
+      tags: [auto-updates]
 
 # ── Play 6: MoonDeckBuddy ─────────────────────────────────────────────────────
 

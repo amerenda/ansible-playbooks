@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily unattended system update (see auto-update.service)
+
+[Timer]
+OnCalendar=*-*-* {{ auto_updates_time }}:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Managed by Ansible (roles/auto-updates). Manual edits will be overwritten.
+#
+# Unattended daily `pacman -Syu`:
+#   - refreshes archlinux-keyring first (stale keyring is the most common
+#     transaction-time failure)
+#   - on a failed transaction: rolls back to the pre-transaction snap-pac
+#     snapshot immediately, skips the reboot, disables further runs until
+#     Alex clears the flag (failure class A/B from the plan's taxonomy)
+#   - on success: reboots only if a reboot-flagged package was touched
+#     (kernel, or one of auto_updates_reboot_packages), and only if there's
+#     no active Sunshine streaming session and no active unlocked local
+#     login (session-aware reboot guard)
+#
+# Reboot need is checked two ways because only the kernel has a stateless
+# signal: /usr/lib/modules/$(uname -r) is removed the moment the `linux`
+# package installs a new version, so that check is always accurate whether
+# it's the day of the update or a later deferred run. Every other
+# reboot-flagged package has no equivalent — its version-changed signal
+# only exists on the day of the transaction, so it's persisted to a flag
+# file to survive a deferred day too.
+set -uo pipefail
+
+FLAG_DIR="{{ auto_updates_flag_dir }}"
+DISABLED_FLAG="$FLAG_DIR/disabled"
+REBOOT_FLAG="$FLAG_DIR/reboot-pending"
+REBOOT_PKGS="{{ auto_updates_reboot_packages | join(' ') }}"
+
+log() { logger -t auto-update "$1"; echo "$1"; }
+
+mkdir -p "$FLAG_DIR"
+
+if [ -f "$DISABLED_FLAG" ]; then
+  log "disabled (a prior run's rollback fired) — skipping until $DISABLED_FLAG is removed"
+  exit 0
+fi
+
+PRE_VERSIONS="$(pacman -Q $REBOOT_PKGS 2>/dev/null || true)"
+
+log "refreshing archlinux-keyring"
+if ! pacman -Sy --noconfirm archlinux-keyring; then
+  log "keyring refresh failed — aborting before touching the rest of the system"
+  exit 1
+fi
+
+log "starting pacman -Syu"
+if ! pacman -Syu --noconfirm; then
+  log "pacman -Syu FAILED — rolling back to the pre-transaction snapshot"
+  PRE_SNAP="$(snapper -c root list --columns number,type,pre-number 2>/dev/null \
+    | awk '$2 == "pre" { n = $1 } END { print n }')"
+  if [ -n "$PRE_SNAP" ]; then
+    if snapper -c root rollback "$PRE_SNAP"; then
+      log "rolled back to pre-transaction snapshot $PRE_SNAP"
+    else
+      log "snapper rollback to $PRE_SNAP FAILED — manual intervention needed"
+    fi
+  else
+    log "no pre-transaction snapshot found — rollback skipped, manual intervention needed"
+  fi
+  touch "$DISABLED_FLAG"
+  log "disabling future runs until Alex clears $DISABLED_FLAG"
+  exit 1
+fi
+
+POST_VERSIONS="$(pacman -Q $REBOOT_PKGS 2>/dev/null || true)"
+[ "$PRE_VERSIONS" != "$POST_VERSIONS" ] && touch "$REBOOT_FLAG"
+
+NEED_REBOOT=false
+[ ! -d "/usr/lib/modules/$(uname -r)" ] && NEED_REBOOT=true
+[ -f "$REBOOT_FLAG" ] && NEED_REBOOT=true
+
+if ! $NEED_REBOOT; then
+  log "update succeeded, no reboot-flagged package touched — done"
+  exit 0
+fi
+
+log "update succeeded, reboot needed — checking active-session guard"
+
+# Sunshine streaming session: sunshine-vdisplay-connect.sh holds a
+# `systemd-inhibit --who=sunshine` for the whole session duration, released
+# by sunshine-vdisplay-disconnect.sh on disconnect (see joystick-notify's
+# sunshine/ scripts, wired via global_prep_cmd in sunshine.conf).
+if systemd-inhibit --list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx sunshine; then
+  log "Sunshine has an active streaming session — deferring reboot to next run"
+  exit 0
+fi
+
+# Active unlocked local login: an unlocked seat0 session means someone is
+# actually at the machine, not just logged in via auto-login.
+SEAT_SESSION="$(loginctl list-sessions --no-legend 2>/dev/null \
+  | awk '$4 == "seat0" { print $1; exit }')"
+if [ -n "$SEAT_SESSION" ]; then
+  LOCKED="$(loginctl show-session "$SEAT_SESSION" -p LockedHint --value 2>/dev/null)"
+  if [ "$LOCKED" = "no" ]; then
+    log "seat0 session $SEAT_SESSION is unlocked — deferring reboot to next run"
+    exit 0
+  fi
+fi
+
+log "no active Sunshine session, no active unlocked local login — rebooting"
+rm -f "$REBOOT_FLAG"
+systemctl reboot

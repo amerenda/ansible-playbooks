@@ -1,0 +1,75 @@
+---
+# Role: auto-updates
+# Daily unattended `pacman -Syu` with snap-pac/limine-snapper-sync rollback
+# on failure and a conditional, session-aware reboot when a reboot-flagged
+# package was touched. Full design and open decisions:
+# Areas/Archlinux/Plans/auto-updates.md (Obsidian).
+
+- name: Adopt existing snapper root config into the repo (no functional change)
+  ansible.builtin.copy:
+    src: snapper-root.conf
+    dest: /etc/snapper/configs/root
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [auto-updates]
+
+- name: Adopt existing limine-snapper-sync config into the repo (no functional change)
+  ansible.builtin.copy:
+    src: limine-snapper-sync.conf
+    dest: /etc/limine-snapper-sync.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [auto-updates]
+
+- name: Ensure auto-updates flag directory exists
+  ansible.builtin.file:
+    path: "{{ auto_updates_flag_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [auto-updates]
+
+- name: Install auto-update script
+  ansible.builtin.template:
+    src: auto-update.sh.j2
+    dest: /usr/local/sbin/auto-update.sh
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [auto-updates]
+
+- name: Install auto-update systemd service
+  ansible.builtin.template:
+    src: auto-update.service.j2
+    dest: /etc/systemd/system/auto-update.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: auto_update_service
+  tags: [auto-updates]
+
+- name: Install auto-update systemd timer
+  ansible.builtin.template:
+    src: auto-update.timer.j2
+    dest: /etc/systemd/system/auto-update.timer
+    owner: root
+    group: root
+    mode: "0644"
+  register: auto_update_timer
+  tags: [auto-updates]
+
+- name: Reload systemd daemon if units changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: auto_update_service.changed or auto_update_timer.changed
+  tags: [auto-updates]
+
+- name: Enable and start auto-update timer
+  ansible.builtin.systemd:
+    name: auto-update.timer
+    enabled: true
+    state: started
+  tags: [auto-updates]
