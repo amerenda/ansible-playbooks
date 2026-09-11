@@ -1,0 +1,61 @@
+---
+# Expose HDD temperatures on murderbot via the drivetemp kernel module.
+#
+# The RAID array disks (sda-sdd, the 4x7.3TB drives behind /mnt/storage) have
+# no temperature sensor exposed today -- `sensors` only sees the NVMe boot
+# drive and the CPU (k10temp). drivetemp is the in-tree kernel module that
+# reads the ATA temperature log over SCSI/SATA and publishes it under
+# /sys/class/hwmon, the same sysfs tree lm-sensors and node_exporter's hwmon
+# collector already read from. Once loaded, the drives show up in `sensors`
+# and get scraped automatically -- node_exporter rescans hwmon on every
+# scrape, so no exporter restart or Prometheus config change is needed.
+#
+# smartmontools is installed alongside it for `smartctl` -- useful for
+# checking the temperature reading is sane against the drive's own SMART
+# data, though it isn't required for the metric itself to work.
+#
+# Usage:
+#   ansible-playbook -i inventory/inventory.ini \
+#     playbooks/infrastructure/disk-temp-monitoring.yml
+
+- name: Expose HDD temperatures on murderbot (drivetemp)
+  hosts: murderbot_komodo_hosts
+  become: yes
+  gather_facts: yes
+  tags: [disk-temp, drivetemp, hwmon]
+
+  tasks:
+    - name: Install smartmontools
+      ansible.builtin.apt:
+        name: smartmontools
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: [disk-temp, packages]
+
+    - name: Load drivetemp kernel module now
+      community.general.modprobe:
+        name: drivetemp
+        state: present
+      tags: [disk-temp, kernel]
+
+    - name: Persist drivetemp module across reboots
+      ansible.builtin.copy:
+        content: |
+          drivetemp
+        dest: /etc/modules-load.d/drivetemp.conf
+        owner: root
+        group: root
+        mode: "0644"
+      tags: [disk-temp, kernel]
+
+    - name: Read back detected drive temperature sensors
+      ansible.builtin.command: sensors
+      register: sensors_output
+      changed_when: false
+      tags: [disk-temp, summary]
+
+    - name: Show detected sensors (confirm drivetemp chips appear)
+      ansible.builtin.debug:
+        msg: "{{ sensors_output.stdout_lines }}"
+      tags: [disk-temp, summary]
