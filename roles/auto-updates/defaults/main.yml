@@ -1,0 +1,11 @@
+---
+# Role: auto-updates
+# Defaults — see Areas/Archlinux/Plans/auto-updates.md (Obsidian) for the
+# full design and the open-decisions this implements.
+
+# Daily run time (local time on the target host).
+auto_updates_time: "04:00"
+
+# Where the script keeps its flag files (disabled-after-rollback,
+# reboot-pending-across-a-deferred-day).
+auto_updates_flag_dir: /var/lib/auto-updates

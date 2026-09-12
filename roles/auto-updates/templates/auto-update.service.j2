@@ -1,0 +1,8 @@
+[Unit]
+Description=Unattended daily pacman -Syu with snapshot rollback and conditional reboot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/auto-update.sh
