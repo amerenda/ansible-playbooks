@@ -6,16 +6,6 @@
 # Daily run time (local time on the target host).
 auto_updates_time: "04:00"
 
-# Repo packages whose upgrade should trigger a reboot. Kernel reboot-need
-# is detected separately (stateless check against the running kernel's
-# /usr/lib/modules dir) — this list is for everything else that benefits
-# from a restart but has no equivalent stateless signal.
-auto_updates_reboot_packages:
-  - systemd
-  - systemd-libs
-  - glibc
-  - linux-firmware
-
 # Where the script keeps its flag files (disabled-after-rollback,
 # reboot-pending-across-a-deferred-day).
 auto_updates_flag_dir: /var/lib/auto-updates

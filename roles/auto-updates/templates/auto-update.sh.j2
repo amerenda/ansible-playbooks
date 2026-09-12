@@ -7,24 +7,28 @@
 #   - on a failed transaction: rolls back to the pre-transaction snap-pac
 #     snapshot immediately, skips the reboot, disables further runs until
 #     Alex clears the flag (failure class A/B from the plan's taxonomy)
-#   - on success: reboots only if a reboot-flagged package was touched
-#     (kernel, or one of auto_updates_reboot_packages), and only if there's
-#     no active Sunshine streaming session and no active unlocked local
-#     login (session-aware reboot guard)
+#   - on success: reboots only if a reboot-flagged package was touched, and
+#     only if there's no active Sunshine streaming session and no active
+#     unlocked local login (session-aware reboot guard)
 #
-# Reboot need is checked two ways because only the kernel has a stateless
-# signal: /usr/lib/modules/$(uname -r) is removed the moment the `linux`
-# package installs a new version, so that check is always accurate whether
-# it's the day of the update or a later deferred run. Every other
-# reboot-flagged package has no equivalent — its version-changed signal
-# only exists on the day of the transaction, so it's persisted to a flag
-# file to survive a deferred day too.
+# Reboot-need detection deliberately does NOT maintain its own guessed list
+# of "reboot-flagged" packages — this host already has an authoritative,
+# well-maintained one: /usr/share/libalpm/hooks/cachyos-reboot-required.hook
+# (package `cachyos-hooks`), which covers kernels, mkinitcpio, mesa, nvidia,
+# systemd, filesystem tools, etc., and even checks package-in-use logic
+# (e.g. skips an alternate, non-running kernel). Confirmed live 2026-09-12:
+# a mkinitcpio update (not in any hand-picked list) correctly triggered its
+# "Reboot is recommended due to the upgrade of core system package(s)."
+# notice on pacman's stderr — that line is the signal this script keys off,
+# rather than re-deriving the same package list by hand and inevitably
+# drifting from it over time.
 set -uo pipefail
 
 FLAG_DIR="{{ auto_updates_flag_dir }}"
 DISABLED_FLAG="$FLAG_DIR/disabled"
 REBOOT_FLAG="$FLAG_DIR/reboot-pending"
-REBOOT_PKGS="{{ auto_updates_reboot_packages | join(' ') }}"
+PACMAN_LOG="$(mktemp)"
+trap 'rm -f "$PACMAN_LOG"' EXIT
 
 log() { logger -t auto-update "$1"; echo "$1"; }
 
@@ -35,8 +39,6 @@ if [ -f "$DISABLED_FLAG" ]; then
   exit 0
 fi
 
-PRE_VERSIONS="$(pacman -Q $REBOOT_PKGS 2>/dev/null || true)"
-
 log "refreshing archlinux-keyring"
 if ! pacman -Sy --noconfirm archlinux-keyring; then
   log "keyring refresh failed — aborting before touching the rest of the system"
@@ -44,7 +46,7 @@ if ! pacman -Sy --noconfirm archlinux-keyring; then
 fi
 
 log "starting pacman -Syu"
-if ! pacman -Syu --noconfirm; then
+if ! pacman -Syu --noconfirm 2>&1 | tee "$PACMAN_LOG"; then
   log "pacman -Syu FAILED — rolling back to the pre-transaction snapshot"
   PRE_SNAP="$(snapper -c root list --columns number,type,pre-number 2>/dev/null \
     | awk '$2 == "pre" { n = $1 } END { print n }')"
@@ -62,14 +64,9 @@ if ! pacman -Syu --noconfirm; then
   exit 1
 fi
 
-POST_VERSIONS="$(pacman -Q $REBOOT_PKGS 2>/dev/null || true)"
-[ "$PRE_VERSIONS" != "$POST_VERSIONS" ] && touch "$REBOOT_FLAG"
+grep -q "Reboot is recommended" "$PACMAN_LOG" && touch "$REBOOT_FLAG"
 
-NEED_REBOOT=false
-[ ! -d "/usr/lib/modules/$(uname -r)" ] && NEED_REBOOT=true
-[ -f "$REBOOT_FLAG" ] && NEED_REBOOT=true
-
-if ! $NEED_REBOOT; then
+if [ ! -f "$REBOOT_FLAG" ]; then
   log "update succeeded, no reboot-flagged package touched — done"
   exit 0
 fi
