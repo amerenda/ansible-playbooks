@@ -13,7 +13,7 @@ Server provisioning only:
 - **Ansible does not deploy services.** Deployment is Komodo (stateful) or ArgoCD (stateless).
 - **Ansible does not create Docker volumes.** Volumes are created by Docker on first compose start.
 - **Ansible does not create PostgreSQL databases.** Databases are created by Tofu via `provision_app`.
-- **Ansible is never called by an AI agent.** It is always run by a human.
+- **An AI agent may run Ansible playbooks with Alex's explicit permission, granted per run — not a standing yes.** Never in CI pipelines or unattended agent code (see below).
 
 ## One secret input: BWS_ACCESS_TOKEN
 
@@ -58,9 +58,12 @@ All tasks must be idempotent. Running a playbook twice must produce the same res
 
 ## Running playbooks
 
-Playbooks are run manually by a human with:
+Playbooks are normally run manually by a human with:
 ```bash
 BWS_ACCESS_TOKEN=<token> ansible-playbook -i inventory/ playbooks/<name>.yml
 ```
 
-Never run playbooks in CI pipelines or from agent code.
+An AI agent may run the same command instead, but only with Alex's explicit
+permission given in that session for that specific run — never inferred
+from a prior approval, and never automated. Never run playbooks in CI
+pipelines or from unattended agent code.
