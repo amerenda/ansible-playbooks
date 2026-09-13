@@ -23,11 +23,21 @@ homebrew_packages:
   - socat
   - ollama   # CLI/binary only — server runs as our own LaunchDaemon, not `brew services`
 
-# Ollama models to keep pulled (idempotent — playbook skips any already present).
-# nomic-embed-text is the only model anything in prod currently depends on
-# (mem0's embedder, via LiteLLM). Add more here if a new dependency shows up.
+# Ollama models to keep pulled — this list is enforced desired state
+# (idempotent: playbook pulls anything missing AND removes any installed
+# model NOT in this list, see "Remove Ollama models not in desired list"
+# task, mini-ollama tag). Add a model here BEFORE manually pulling it —
+# anything pulled by hand outside this list gets deleted on the next run.
+#
+# nomic-embed-text: required by mem0's embedder, via LiteLLM.
+# mistral-nemo:12b: prompt expansion (see project memory).
+#
+# Enforcement added 2026-09-08 after 12 unlisted models (~45GB) accumulated
+# from pre-murderbot-migration experimentation with nothing ever cleaning
+# them up — contributed to a disk-full mac-mini-m4 (256GB disk, 16GB free).
 ollama_models:
   - nomic-embed-text
+  - mistral-nemo:12b
 
 # System (timezone also in group_vars/servers.yml)
 
