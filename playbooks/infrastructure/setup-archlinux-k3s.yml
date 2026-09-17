@@ -47,3 +47,30 @@
         comment: "flannel VXLAN (k3s overlay)"
       when: inventory_hostname == 'archlinux'
       tags: [archlinux, k3s, ufw]
+
+    # Same failure class as the 8472/udp rule above: MetalLB speakers use
+    # memberlist (hashicorp/memberlist) on TCP+UDP 7946 to gossip cluster
+    # membership and elect the L2 announcer per LoadBalancer service.
+    # archlinux's ufw never had this port opened, so murderbot's speaker
+    # could never complete a Push/Pull with archlinux, destabilizing
+    # announcer election and flapping the k3s-prometheus-heartbeat VIP.
+    # See Areas/Archlinux/notes/metallb-memberlist-flap-background.md.
+    - name: Allow MetalLB memberlist (TCP 7946) through UFW from the cluster LAN
+      community.general.ufw:
+        rule: allow
+        port: "7946"
+        proto: tcp
+        src: "10.100.20.0/24"
+        comment: "MetalLB memberlist (speaker gossip)"
+      when: inventory_hostname == 'archlinux'
+      tags: [archlinux, k3s, ufw]
+
+    - name: Allow MetalLB memberlist (UDP 7946) through UFW from the cluster LAN
+      community.general.ufw:
+        rule: allow
+        port: "7946"
+        proto: udp
+        src: "10.100.20.0/24"
+        comment: "MetalLB memberlist (speaker gossip)"
+      when: inventory_hostname == 'archlinux'
+      tags: [archlinux, k3s, ufw]
