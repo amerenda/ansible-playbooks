@@ -461,6 +461,43 @@
         - "{{ media_config_root_effective }}/seerr/config"
       tags: [debian-komodo, debian-media-dirs]
 
+    # SQLite-backed media-server services keep their live config/db on the
+    # NVMe SSD (/opt) instead of the RAID5 array above — see
+    # murderbot/media-server/CLAUDE.md "SQLite configs moved off the RAID5
+    # array" (komodo-dean-gitops). pre-deploy.sh also has mkdir/chown lines
+    # for these same paths, but they are no-ops there: pre-deploy.sh runs
+    # inside the Periphery container, and Periphery's own compose.yaml
+    # (murderbot/komodo/compose.yaml) only bind-mounts /mnt/storage in, not
+    # /opt — so pre-deploy.sh's mkdir/chown for /opt paths only ever touch
+    # Periphery's own ephemeral filesystem, never the real host. Confirmed
+    # 2026-09-18: this left a new service's (maintainerr) /opt config dir
+    # auto-created by dockerd as root:root on first deploy, since nothing
+    # real had ever chowned it, and the container (which runs as uid 1000)
+    # couldn't write to it. Provisioning these here instead — Ansible runs
+    # directly on the host, not sandboxed — is the fix; this task must be
+    # kept in sync with pre-deploy.sh's `*_CONFIG_ROOT` list whenever a
+    # service is added to or removed from the SSD-config set.
+    - name: Pre-create SSD (/opt) media-server config dirs (owner 1000:1000)
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "1000"
+        group: "1000"
+        mode: "0755"
+      loop:
+        - /opt/jellyfin-config
+        - /opt/seerr-config
+        - /opt/bazarr-config
+        - /opt/calibre-web-config
+        - /opt/profilarr-config
+        - /opt/prowlarr-config
+        - /opt/radarr-config
+        - /opt/sabnzbd-config
+        - /opt/shelfarr-config
+        - /opt/sonarr-config
+        - /opt/maintainerr-config
+      tags: [debian-komodo, debian-media-dirs]
+
     - name: Verify /mnt/storage is mounted (out-of-band setup required)
       shell: mountpoint -q "{{ media_data_root_effective }}"
       register: storage_mount
